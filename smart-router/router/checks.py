@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,6 +22,30 @@ _FENCE = re.compile(r"```([\w+-]*)[^\n]*\n(.*?)```", re.S)
 _URL = re.compile(r"https?://[^\s)\]>\"']+")
 _REFUSAL = re.compile(r"^\s*(i('m| am) (sorry|unable)|i can(no|')t (help|assist))", re.I)
 _PLACEHOLDER = re.compile(r"^\s*(pass|\.\.\.)\s*(#.*)?$|#\s*TODO|raise NotImplementedError", re.M)
+_LOOKS_PY = re.compile(r"^\s*(def |async def |class |import |from \w+ import |if __name__)", re.M)
+
+
+def _clean_env(tmp: str) -> dict:
+    """Minimal environment for model-written/user-supplied test code: no credentials,
+    no PYTHONPATH injection, HOME pointing at the throwaway dir."""
+    keep = {"PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR", "PATHEXT",
+            "NUMBER_OF_PROCESSORS", "PYTHONDONTWRITEBYTECODE", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"}
+    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
+    env.update({"HOME": tmp, "TMPDIR": tmp, "TEMP": tmp, "TMP": tmp,
+                "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+    return env
+
+
+def _limits(timeout_s: int):
+    """Bound a runaway generated test where the OS allows it (POSIX only)."""
+    if os.name != "posix":
+        return None
+    import resource
+
+    def apply():
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout_s + 10, timeout_s + 10))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+    return apply
 
 
 @dataclass
@@ -57,8 +82,11 @@ def _run_python_tests(blocks: list[str], extra_tests: str | None, timeout_s: int
         if not has_test:
             return True, "no tests to run"
         try:
-            p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider"],
-                               cwd=d, capture_output=True, text=True, timeout=timeout_s)
+            # -I: isolated mode (no PYTHONPATH, no user site-packages); env carries no secrets.
+            p = subprocess.run([sys.executable, "-I", "-m", "pytest", "-q", "-x", "--no-header",
+                                "-p", "no:cacheprovider"],
+                               cwd=d, capture_output=True, text=True, timeout=timeout_s,
+                               env=_clean_env(d), preexec_fn=_limits(timeout_s))
         except subprocess.TimeoutExpired:
             return False, f"tests timed out after {timeout_s}s"
         tail = (p.stdout + p.stderr).strip().splitlines()[-15:]
@@ -107,6 +135,7 @@ def run_checks(profile: TaskProfile, instruction: str, output: str, stop_reason:
             reasons.append("coding task but no code block returned")
             score -= 0.5
         py = [b for lang, b in blocks if lang in ("python", "py")]
+        py += [b for lang, b in blocks if not lang and _LOOKS_PY.search(b)]
         for b in py:
             run.append("python_syntax")
             try:

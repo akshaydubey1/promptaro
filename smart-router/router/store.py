@@ -18,21 +18,30 @@ from pathlib import Path
 
 PRIOR_WEIGHT = 6.0   # how many "virtual runs" the yaml prior is worth
 FEEDBACK_WEIGHT = 3.0  # a person's thumbs up/down counts as this many automatic checks
+DECAY_HALF_LIFE_S = 14 * 86400   # history halves in weight every two weeks: providers change,
+                                # and a model exiled by old failures gets to earn its way back
 
 
 def complexity_bucket(c: float) -> str:
     return "low" if c < 0.35 else ("mid" if c < 0.7 else "high")
 
 
+def _decay(ts: float, now: float) -> float:
+    return 0.5 ** (max(0.0, now - ts) / DECAY_HALF_LIFE_S)
+
+
 @dataclass
 class Agg:
-    runs: int = 0
-    passes: int = 0
-    cost_sum: float = 0.0
+    runs: float = 0.0           # decayed; first attempts only (a model answering a task that
+    passes: float = 0.0         # already failed once faces a biased-harder question)
+    cost_sum: float = 0.0       # all attempts — real money spent
+    cost_n: float = 0.0
     latency_sum_ms: float = 0.0
-    out_tokens_sum: int = 0
-    fb_runs: int = 0          # human feedback (thumbs, merged/discarded agent work)
-    fb_good: int = 0
+    latency_n: float = 0.0
+    out_tokens_sum: float = 0.0
+    out_n: float = 0.0
+    fb_runs: float = 0.0        # human feedback (thumbs, merged/discarded agent work)
+    fb_good: float = 0.0
 
 
 class Store:
@@ -57,14 +66,27 @@ class Store:
             """
         )
         self._agg: dict[tuple[str, str, str], Agg] = {}
-        for row in self._db.execute(
-            "SELECT model_id, task_type, bucket, COUNT(*), SUM(passed), SUM(cost_usd),"
-            " SUM(latency_ms), SUM(tokens_out) FROM runs GROUP BY 1,2,3"
+        now = time.time()
+        for ts, m, t, b, passed, cost, lat, out, att in self._db.execute(
+            "SELECT ts, model_id, task_type, bucket, passed, cost_usd, latency_ms, tokens_out, attempt"
+            " FROM runs"
         ):
-            self._agg[(row[0], row[1], row[2])] = Agg(row[3], row[4] or 0, row[5] or 0.0, row[6] or 0.0, row[7] or 0)
-        for row in self._db.execute("SELECT model_id, task_type, bucket, COUNT(*), SUM(good) FROM feedback GROUP BY 1,2,3"):
-            a = self._agg.setdefault((row[0], row[1], row[2]), Agg())
-            a.fb_runs, a.fb_good = row[3], row[4] or 0
+            w = _decay(ts, now)
+            a = self._agg.setdefault((m, t, b), Agg())
+            a.cost_sum += w * (cost or 0.0)
+            a.cost_n += w
+            a.latency_sum_ms += w * (lat or 0.0)
+            a.latency_n += w
+            a.out_tokens_sum += w * (out or 0)
+            a.out_n += w
+            if (att or 1) == 1:
+                a.runs += w
+                a.passes += w * (passed or 0)
+        for ts, m, t, b, good in self._db.execute("SELECT ts, model_id, task_type, bucket, good FROM feedback"):
+            w = _decay(ts, now)
+            a = self._agg.setdefault((m, t, b), Agg())
+            a.fb_runs += w
+            a.fb_good += w * (good or 0)
 
     # ---------------- telemetry ----------------
     def record(self, *, request_id: str, model_id: str, task_type: str, complexity: float, passed: bool,
@@ -79,11 +101,15 @@ class Store:
                  tokens_in, tokens_out, attempt, json.dumps(reasons)),
             )
             a = self._agg.setdefault((model_id, task_type, b), Agg())
-            a.runs += 1
-            a.passes += int(passed)
             a.cost_sum += cost_usd
+            a.cost_n += 1
             a.latency_sum_ms += latency_ms
+            a.latency_n += 1
             a.out_tokens_sum += tokens_out
+            a.out_n += 1
+            if attempt == 1:
+                a.runs += 1
+                a.passes += int(passed)
 
     def feedback(self, *, model_id: str, task_type: str, complexity: float, good: bool,
                  source: str = "thumbs") -> None:
@@ -110,20 +136,20 @@ class Store:
 
     def observed_latency_ms(self, model_id: str, task_type: str, complexity: float) -> float | None:
         a = self._agg.get((model_id, task_type, complexity_bucket(complexity)))
-        return a.latency_sum_ms / a.runs if a and a.runs >= 3 else None
+        return a.latency_sum_ms / a.latency_n if a and a.latency_n >= 3 else None
 
     def observed_out_tokens(self, model_id: str, task_type: str, complexity: float) -> float | None:
         a = self._agg.get((model_id, task_type, complexity_bucket(complexity)))
-        return a.out_tokens_sum / a.runs if a and a.runs >= 3 else None
+        return a.out_tokens_sum / a.out_n if a and a.out_n >= 3 else None
 
     def stats(self) -> list[dict]:
         out = []
         for (m, t, b), a in sorted(self._agg.items()):
-            out.append({"model": m, "task_type": t, "complexity": b, "runs": a.runs,
+            out.append({"model": m, "task_type": t, "complexity": b, "runs": round(a.runs, 1),
                         "pass_rate": round(a.passes / a.runs, 3) if a.runs else None,
-                        "avg_cost_usd": round(a.cost_sum / a.runs, 6) if a.runs else None,
-                        "avg_latency_ms": round(a.latency_sum_ms / a.runs) if a.runs else None,
-                        "thumbs_up": a.fb_good, "thumbs_down": a.fb_runs - a.fb_good})
+                        "avg_cost_usd": round(a.cost_sum / a.cost_n, 6) if a.cost_n else None,
+                        "avg_latency_ms": round(a.latency_sum_ms / a.latency_n) if a.latency_n else None,
+                        "thumbs_up": round(a.fb_good, 1), "thumbs_down": round(a.fb_runs - a.fb_good, 1)})
         return out
 
     # ---------------- cache ----------------

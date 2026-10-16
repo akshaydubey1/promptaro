@@ -22,10 +22,21 @@ def main() -> None:
     ap.add_argument("--max-cost", type=float, help="USD ceiling for this request")
     ap.add_argument("--model", help="force a model id from config/models.yaml")
     ap.add_argument("--review", choices=["off", "auto", "always"])
+    ap.add_argument("--private", action="store_true",
+                    help="don't send this to free providers that may train on prompts")
+    ap.add_argument("--free", choices=["auto", "on", "off"], default="auto",
+                    help="allow free models (default: the app's 'free models' setting)")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--route-only", action="store_true", help="show the routing decision, don't call a model")
+    ap.add_argument("--gateway-token", action="store_true",
+                    help="print the coding-tools gateway token and exit")
     ap.add_argument("--json", action="store_true", help="print the full trace as JSON")
     a = ap.parse_args()
+
+    if a.gateway_token:
+        from . import gateway
+        print(gateway.gateway_token())
+        return
 
     instruction = a.instruction or sys.stdin.read()
     if not instruction.strip():
@@ -38,7 +49,8 @@ def main() -> None:
         try:
             return await r.run(RunRequest(instruction, ctx, tests=tests, prefer=a.prefer, max_cost_usd=a.max_cost,
                                           force_model=a.model, use_cache=not a.no_cache, cross_review=a.review,
-                                          dry_run=a.route_only))
+                                          dry_run=a.route_only, private=a.private,
+                                          allow_free={"auto": None, "on": True, "off": False}[a.free]))
         finally:
             await r.aclose()
 
