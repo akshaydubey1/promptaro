@@ -375,8 +375,14 @@ $("preferPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, 
 $("newChat").onclick = () => { S.current = null; S.session = null; $("title").textContent = "New chat"; $("input").placeholder = "Ask anything"; renderSide(); renderTop(); closeReview(); welcome(); input.focus(); $("side").classList.remove("open"); };
 
 /* ---------------- live events ---------------- */
-function connectStream() {
-  const es = new EventSource("/api/stream");
+let streamKey = "";
+async function connectStream() {
+  if (!streamKey) {
+    try { streamKey = (await api("/api/stream-key", { method: "POST" })).key; }
+    catch { setTimeout(connectStream, 3000); return; }
+  }
+  const es = new EventSource(`/api/stream?key=${encodeURIComponent(streamKey)}`);
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) { streamKey = ""; setTimeout(connectStream, 3000); } };
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
     if (ev.kind === "session") {

@@ -13,6 +13,8 @@ import re
 import shutil
 from pathlib import Path
 
+from .tools import _clean_env
+
 HOME = Path(os.environ.get("TILLWRIGHT_HOME", Path.home() / ".tillwright"))
 
 
@@ -27,10 +29,21 @@ class GitError(Exception):
     pass
 
 
-async def git(*args: str, cwd: str | Path, check: bool = True, timeout: float = 120) -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
-    proc = await asyncio.create_subprocess_exec("git", *args, cwd=str(cwd), env=env,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+async def git(*args: str, cwd: str | Path, check: bool = True, timeout: float = 120,
+              keep_env: tuple = ()) -> str:
+    # Scrubbed env: keys in the shell can't be exfiltrated through a repo's hooks, and git
+    # can't be prompted into a credential flow (GIT_TERMINAL_PROMPT=0). A hostile repo can
+    # point core.hooksPath at scripts inside itself, so hooks are switched off for every call.
+    env = _clean_env()
+    for k in keep_env:
+        if k in os.environ:
+            env[k] = os.environ[k]
+    try:
+        proc = await asyncio.create_subprocess_exec("git", "-c", f"core.hooksPath={os.devnull}", *args, cwd=str(cwd),
+                                                    env=env, stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.PIPE)
+    except FileNotFoundError:
+        raise GitError("git isn't installed or isn't on PATH. Install git, then try again.")
     out, err = await asyncio.wait_for(proc.communicate(), timeout)
     if check and proc.returncode != 0:
         raise GitError((err or out).decode(errors="replace").strip() or f"git {args[0]} failed")
@@ -133,7 +146,8 @@ async def open_pr(wt: str, branch: str, title: str, body: str) -> str:
     remote = (await git("remote", cwd=wt, check=False)).split()
     if not remote:
         raise GitError("This repo has no remote to push to.")
-    await git("push", "-u", remote[0], branch, cwd=wt, timeout=300)
+    # SSH_AUTH_SOCK only for the push: ssh remotes need the agent, and hooks are already off.
+    await git("push", "-u", remote[0], branch, cwd=wt, timeout=300, keep_env=("SSH_AUTH_SOCK",))
     proc = await asyncio.create_subprocess_exec("gh", "pr", "create", "--title", title, "--body", body,
                                                 "--head", branch, cwd=wt, stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.PIPE)

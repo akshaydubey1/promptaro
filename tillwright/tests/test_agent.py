@@ -50,11 +50,48 @@ def test_command_policy(cmd, policy, expected):
     assert needs_approval(cmd, policy) is expected
 
 
+def test_command_policy_vets_paths_inside_workspace(tmp_path):
+    ws = tmp_path
+    # "Safe" read commands still ask when they point outside the workspace.
+    assert needs_approval("cat /etc/passwd", "ask_risky", ws) is True
+    assert needs_approval("cat ~/.ssh/id_rsa", "ask_risky", ws) is True
+    assert needs_approval("grep -r foo /usr", "ask_risky", ws) is True
+    assert needs_approval("find / -name x", "ask_risky", ws) is True
+    assert needs_approval("cat src/a.py", "ask_risky", ws) is False
+    # Redirection inside the workspace is fine; outside it is not.
+    assert needs_approval("echo hi > out.txt", "ask_risky", ws) is False
+    assert needs_approval("echo hi > /tmp/x", "ask_risky", ws) is True
+    assert needs_approval("echo hi > out.txt", "never_ask", ws) is False
+    assert needs_approval("echo hi > /tmp/x", "never_ask", ws) is None
+    # A second command can't hide behind a safe first half (&, newline, substitution).
+    assert needs_approval("ls\nrm -f calc.py", "ask_risky", ws) is True
+    assert needs_approval("ls & rm -f calc.py", "ask_risky", ws) is True
+    assert needs_approval("cat <(ls)", "ask_risky", ws) is True
+    assert needs_approval("cat >(tee /tmp/x)", "ask_risky", ws) is True
+    # Destructive and workspace-wiping commands stay refused.
+    assert needs_approval("rm -rf .", "ask_risky", ws) is None
+    assert needs_approval("rm -rf .", "never_ask", ws) is None
+    assert needs_approval("git clean -fdx", "never_ask", ws) is None
+    assert needs_approval("rm -fr /", "ask_risky", ws) is None
+
+
 def test_secrets_stripped_from_commands(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-secret")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp")
     env = _clean_env()
     assert "OPENROUTER_API_KEY" not in env and "GITHUB_TOKEN" not in env and "PATH" in env
+
+
+def test_env_scrub_covers_credential_shapes(monkeypatch):
+    monkeypatch.setenv("GITLAB_PAT", "glpat-x")
+    monkeypatch.setenv("DATABASE_DSN", "postgres://u:p@h/db")
+    monkeypatch.setenv("ODD_NAME", "mysql://u:secret@host/db")     # credential inside an innocuous name
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    monkeypatch.setenv("NORMAL_URL", "http://localhost:8000")
+    env = _clean_env()
+    for k in ("GITLAB_PAT", "DATABASE_DSN", "ODD_NAME", "SSH_AUTH_SOCK"):
+        assert k not in env
+    assert env["NORMAL_URL"] == "http://localhost:8000" and "HOME" in env
 
 
 def test_edit_requires_unique_match(tmp_path):

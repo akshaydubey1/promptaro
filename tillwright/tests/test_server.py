@@ -45,6 +45,22 @@ def test_writes_need_app_header(client):
     assert client.post("/api/sessions", json={}, headers=H).status_code == 200
 
 
+def test_event_stream_requires_key(client):
+    assert client.get("/api/stream").status_code == 401
+    assert client.get("/api/stream?key=nope").status_code == 401
+    assert client.post("/api/stream-key").status_code == 403        # still behind the app header
+    assert client.post("/api/stream-key", headers=H).json()["key"]
+
+
+def test_manual_run_still_vets_never_commands(client, repo):
+    client.fake.shared = [act("finish", summary="ok")]
+    sid = client.post("/api/agents", json={"project": str(repo), "task": "do x"}, headers=H).json()["id"]
+    wait_status(client, sid, done=("review",))
+    r = client.post(f"/api/sessions/{sid}/run", json={"command": "sudo rm -rf /"}, headers=H)
+    assert r.json() == {"ok": False, "blocked": True}
+    assert client.post(f"/api/sessions/{sid}/run", json={"command": "echo ok"}, headers=H).json()["ok"]
+
+
 def test_foreign_host_rejected(client):
     assert client.get("/api/sessions", headers={"host": "evil.example"}).status_code == 400
 

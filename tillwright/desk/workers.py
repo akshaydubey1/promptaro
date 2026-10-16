@@ -43,27 +43,31 @@ _status_cache: dict[str, tuple[float, dict]] = {}
 _rest_until: dict[str, float] = {}
 
 # What Claude Code may do on its own inside the task's copy. Anything else is refused,
-# because nobody is there to answer a permission prompt in this mode.
+# because nobody is there to answer a permission prompt in this mode. Built-in
+# Read/Grep/Glob/LS cover file reads — shell versions are left out because they can
+# read anywhere on the disk, not just the workspace.
 SAFE_TOOLS = [
     "Read", "Edit", "MultiEdit", "Write", "Glob", "Grep", "LS", "TodoWrite",
-    "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(rg:*)",
-    "Bash(find:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
+    "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
     "Bash(python -m pytest:*)", "Bash(python3 -m pytest:*)", "Bash(pytest:*)", "Bash(npm test:*)",
     "Bash(npm run test:*)", "Bash(npm run lint:*)", "Bash(npm run build:*)", "Bash(npx tsc:*)",
     "Bash(go test:*)", "Bash(go build:*)", "Bash(go vet:*)", "Bash(cargo test:*)", "Bash(cargo build:*)",
     "Bash(cargo check:*)", "Bash(make test:*)", "Bash(terraform fmt:*)", "Bash(terraform validate:*)",
     "Bash(ruff:*)", "Bash(mypy:*)",
 ]
-NEVER_TOOLS = ["Bash(git push:*)", "Bash(sudo:*)", "Bash(rm -rf:*)", "Bash(curl:*)", "Bash(wget:*)",
-               "Bash(ssh:*)", "Bash(scp:*)", "Bash(kubectl apply:*)", "Bash(kubectl delete:*)",
+NEVER_TOOLS = ["Bash(git push:*)", "Bash(git clean:*)", "Bash(sudo:*)", "Bash(rm -rf:*)", "Bash(rm -fr:*)",
+               "Bash(curl:*)", "Bash(wget:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(gh:*)",
+               "Bash(dd:*)", "Bash(mkfs:*)", "Bash(shred:*)", "Bash(chmod -R:*)", "Bash(chown:*)",
+               "Bash(npm publish:*)", "Bash(yarn publish:*)", "Bash(cargo publish:*)",
+               "Bash(kubectl apply:*)", "Bash(kubectl delete:*)",
                "Bash(terraform apply:*)", "Bash(terraform destroy:*)"]
 
 _ACTION = {"Read": "read_file", "Edit": "edit_file", "MultiEdit": "edit_file", "Write": "write_file",
            "Bash": "run", "Grep": "search", "Glob": "search", "LS": "list_files"}
 
-WORKER_NOTE = ("You are running inside Tillwright on an isolated git branch of the user's project. Make focused "
-               "changes, run the project's tests when they exist, and end with a short summary of what changed "
-               "and how you verified it.")
+WORKER_NOTE = ("You are running inside Tillwright on an isolated git branch of the user's project. Stay inside "
+               "this folder: only read or change files that live here. Make focused changes, run the project's "
+               "tests when they exist, and end with a short summary of what changed and how you verified it.")
 
 
 # ------------------------------------------------------------- finding the tools
@@ -237,6 +241,8 @@ class _CliRun:
                                                     env=_worker_env(), stdout=asyncio.subprocess.PIPE,
                                                     stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
                                                     limit=16 * 1024 * 1024)
+        # Drain stderr concurrently — a full stderr pipe would deadlock the run.
+        err_task = asyncio.create_task(proc.stderr.read())
         try:
             async for raw in proc.stdout:
                 line = raw.decode(errors="replace").strip()
@@ -255,8 +261,8 @@ class _CliRun:
 
         ok, summary, usage = self.outcome()
         err = ""
-        if not ok and proc.stderr:
-            err = (await proc.stderr.read()).decode(errors="replace")[-600:].strip()
+        if not ok:
+            err = (await err_task).decode(errors="replace")[-600:].strip()
         if usage:
             store.add_usage(sid, 0.0, usage.get("tokens_in", 0), usage.get("tokens_out", 0))   # included in plan
             self.desk.count_subscription_run(sid, usage)
