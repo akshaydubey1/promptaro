@@ -342,6 +342,27 @@ def _last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+_sticky: dict[str, tuple[float, str]] = {}       # conversation fingerprint -> (expires, model_id)
+_STICKY_TTL = 3600                                # keep a tool's conversation on one model ~1h
+
+
+def _stick_key(messages: list[dict], tools: bool) -> str:
+    """A tool's conversation is identified by its first user message, so every turn of that
+    conversation prefers the model it started on — better prompt-cache hits and consistency."""
+    first = next((m for m in messages if m.get("role") == "user"), None)
+    text = first.get("content") if first else ""
+    if not isinstance(text, str):
+        text = json.dumps(text)[:2000]
+    return hashlib.sha256((text[:2000] + ("|t" if tools else "")).encode()).hexdigest()[:16]
+
+
+def _sticky_pick(key: str, model_id: str) -> None:
+    now = time.time()
+    for k in [k for k, (exp, _) in _sticky.items() if exp <= now]:
+        _sticky.pop(k, None)
+    _sticky[key] = (now + _STICKY_TTL, model_id)
+
+
 def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool, images: bool,
          requested: str) -> list:
     """Models to try, best first. An exact model name is a hint: spend, privacy,
@@ -350,6 +371,7 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
     settings = catalog.get_settings()
     mode = settings.get("free_models", "chat")
     free_only = settings.get("gateway_spend", "free") == "free"
+    daily_left = router._daily_budget_left()
     need = {"tools"} if tools else set()
     free_ok = catalog.FREE.available()
     usable_ids = {m.id for m in reg.usable()}
@@ -357,8 +379,11 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
     def usable_for_gateway(m) -> bool:
         if m.provider == "offline" or m.id not in usable_ids:
             return False
-        if free_only and not (m.extra.get("free") or (m.price_in == 0 and m.price_out == 0)):
+        is_free = bool(m.extra.get("free")) or (m.price_in == 0 and m.price_out == 0)
+        if free_only and not is_free:
             return False                                        # fail closed: never silently spend
+        if not is_free and m.cost(est_in, est_out) > daily_left:
+            return False                                        # daily budget reached
         if m.extra.get("free") and (
                 mode == "off"                                    # free models disabled entirely
                 or (mode != "all" and m.extra.get("trains"))     # private work: no trainers
@@ -394,7 +419,14 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
             continue
         seen.add(c.model.id)
         out.append(c.model)
-    return out[:MAX_CANDIDATES]
+    out = out[:MAX_CANDIDATES]
+    hit = _sticky.get(_stick_key(messages, tools))
+    if hit and hit[0] > time.time():
+        for i, m in enumerate(out):                    # stay on this conversation's model when it still qualifies
+            if m.id == hit[1]:
+                out.insert(0, out.pop(i))
+                break
+    return out
 
 
 async def plan_or_wait(router, **kw) -> list:
@@ -490,11 +522,14 @@ def _all_failed(tried: list, anthropic: bool = True):
     return _anthropic_error(400, "invalid_request_error", msg) if anthropic else _openai_error(400, "all_refused", msg)
 
 
-def _account(router, spec, tin: int, tout: int, headers: dict | None = None, res: dict | None = None) -> None:
+def _account(router, spec, tin: int, tout: int, headers: dict | None = None, res: dict | None = None,
+             stick: str | None = None) -> None:
     if res is not None:
         quota.LEDGER.settle(res, spec, tin + tout, headers)
     else:
         quota.after_call(spec, SimpleNamespace(tokens_in=tin, tokens_out=tout, headers=headers or {}))
+    if stick:
+        _sticky_pick(stick, spec.id)
     router.registry.breaker.record(spec.id, True)
     router.notify_usage(spec, tin, tout, "gateway")
 
@@ -558,6 +593,7 @@ async def messages(request: Request):
                                 "for them. Add a free provider in Tillwright → Connections, allow paid models in "
                                 "Coding tools, or try again later.")
     stream = bool(body.get("stream"))
+    stick = _stick_key(body.get("messages") or [], bool(body.get("tools")))
     tried: list = []      # actual provider refusals
     skipped: list = []    # models whose free allowance ran out between planning and sending
     for spec in cands:
@@ -577,7 +613,7 @@ async def messages(request: Request):
                     hdrs["anthropic-beta"] = request.headers["anthropic-beta"]
                 resp = await _open(url, hdrs, out, stream)
                 if stream:
-                    return _anthropic_passthrough(router, spec, resp, est_in, res)
+                    return _anthropic_passthrough(router, spec, resp, est_in, res, stick)
                 try:
                     d = resp.json()
                 except ValueError:
@@ -587,7 +623,7 @@ async def messages(request: Request):
                     continue
                 u = d.get("usage") or {}
                 _account(router, spec, u.get("input_tokens", est_in), u.get("output_tokens", 0),
-                         rate_headers(resp), res)
+                         rate_headers(resp), res, stick)
                 headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
                 return JSONResponse(d, headers=headers)
             url, hdrs = _openai_target(spec)
@@ -616,14 +652,14 @@ async def messages(request: Request):
                 continue
             msg = openai_to_anthropic(data, requested)
             _account(router, spec, msg["usage"]["input_tokens"] or est_in, msg["usage"]["output_tokens"],
-                     rate_headers(resp), res)
+                     rate_headers(resp), res, stick)
             return JSONResponse(msg, headers=headers)
-        return StreamingResponse(_translate_stream(router, spec, resp, requested, est_in, res),
+        return StreamingResponse(_translate_stream(router, spec, resp, requested, est_in, res, stick),
                                  media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
     return _all_failed(tried or [(s, True) for s in skipped])
 
 
-async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_in: int, res=None):
+async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_in: int, res=None, stick=None):
     tr = StreamTranslator(model, est_in)
     hdrs = rate_headers(resp)
     try:
@@ -650,10 +686,10 @@ async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_
                                                                  f"{str(e)[:200]}. Send the message again."}})
     finally:
         await resp.aclose()
-        _account(router, spec, tr.input_tokens, tr.output_tokens, hdrs, res)
+        _account(router, spec, tr.input_tokens, tr.output_tokens, hdrs, res, stick)
 
 
-def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=None):
+def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=None, stick=None):
     headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
 
     async def pipe():
@@ -671,7 +707,7 @@ def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=
                 yield line + "\n"
         finally:
             await resp.aclose()
-            _account(router, spec, tin, tout, None, res)
+            _account(router, spec, tin, tout, None, res, stick)
     return StreamingResponse(pipe(), media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
 
 
@@ -694,6 +730,7 @@ async def chat_completions(request: Request):
         return _openai_error(503, "no_model", "No connected model can take this request right now. Add a free "
                              "provider or a key in Tillwright → Connections.")
     stream = bool(body.get("stream"))
+    stick = _stick_key(msgs, bool(body.get("tools")))
     tried: list = []
     skipped: list = []
     for spec in cands:
@@ -728,7 +765,7 @@ async def chat_completions(request: Request):
                 continue
             u = d.get("usage") or {}
             _account(router, spec, u.get("prompt_tokens", est_in), u.get("completion_tokens", 0),
-                     rate_headers(resp), res)
+                     rate_headers(resp), res, stick)
             d["model"] = requested
             return JSONResponse(d, headers=headers)
 
@@ -746,7 +783,7 @@ async def chat_completions(request: Request):
                     yield line + "\n"
             finally:
                 await resp.aclose()
-                _account(router, spec, tin, tout, hdr, res)
+                _account(router, spec, tin, tout, hdr, res, stick)
         return StreamingResponse(pipe(), media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
     return _all_failed(tried or [(s, True) for s in skipped], anthropic=False)
 

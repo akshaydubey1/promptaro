@@ -46,6 +46,7 @@ def isolated_secrets(tmp_path, monkeypatch):
     monkeypatch.setattr(quota, "LEDGER", quota.Ledger())             # fresh free-tier ledger per test
     monkeypatch.setattr(quota, "use", lambda path: quota.LEDGER)
     monkeypatch.setattr(gateway, "_client", None)
+    monkeypatch.setattr(gateway, "_sticky", {})                      # fresh session stickiness per test
     return home
 
 

@@ -154,8 +154,10 @@ class AgentRun:
         from router.catalog import get_settings
         mode = get_settings().get("free_models", "chat")
         # Private code: free models only from providers that don't train on prompts, unless allowed.
+        # Task budget and the global daily cap both limit paid models; free models always fit.
+        cap = max(0.0, min(self.max_cost, r._daily_budget_left()))
         d = route(r.registry, r.store, prof, prefer=self.s.get("prefer") or "balanced", force_model=force,
-                  allow_free=mode != "off", private=mode != "all")
+                  allow_free=mode != "off", private=mode != "all", max_cost_usd=cap)
         ladder = [d.primary] + d.ladder
         cand = ladder[min(self.level, len(ladder) - 1)]
         return cand.model, prof, d, len(ladder)
@@ -287,6 +289,7 @@ class AgentRun:
 
             cost = spec.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.add_usage(sid, cost, comp.tokens_in, comp.tokens_out)
+            r.store.add_spend(cost)
             top = strongest.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.bump(spent=cost, saved=max(0.0, top - cost), tokens=comp.tokens_in + comp.tokens_out, agent_steps=1)
             action, err = parse_action(comp.text)

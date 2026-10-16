@@ -8,6 +8,7 @@ memory and written through on each recorded run.
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import sqlite3
@@ -63,6 +64,8 @@ class Store:
               bucket TEXT, good INTEGER, source TEXT);
             CREATE TABLE IF NOT EXISTS cache (
               key TEXT PRIMARY KEY, ts REAL, payload TEXT);
+            CREATE TABLE IF NOT EXISTS spend (
+              day TEXT PRIMARY KEY, usd REAL DEFAULT 0);
             """
         )
         self._agg: dict[tuple[str, str, str], Agg] = {}
@@ -141,6 +144,20 @@ class Store:
     def observed_out_tokens(self, model_id: str, task_type: str, complexity: float) -> float | None:
         a = self._agg.get((model_id, task_type, complexity_bucket(complexity)))
         return a.out_tokens_sum / a.out_n if a and a.out_n >= 3 else None
+
+    # ---------------- daily spend (for the daily budget cap) ----------------
+    def add_spend(self, usd: float) -> None:
+        if usd <= 0:
+            return
+        with self._lock:
+            self._db.execute("INSERT INTO spend(day,usd) VALUES (?,?) "
+                             "ON CONFLICT(day) DO UPDATE SET usd=usd+excluded.usd",
+                             (datetime.date.today().isoformat(), usd))
+
+    def spend_today(self) -> float:
+        row = self._db.execute("SELECT usd FROM spend WHERE day=?",
+                               (datetime.date.today().isoformat(),)).fetchone()
+        return float(row[0]) if row else 0.0
 
     def stats(self) -> list[dict]:
         out = []

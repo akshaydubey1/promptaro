@@ -210,6 +210,7 @@ def get_settings() -> dict:
     # all  : code may also use free providers that may train on prompts
     d.setdefault("free_models", "chat")
     d.setdefault("gateway_spend", "free")      # coding tools: "free" = never spend money, "paid_ok" = may
+    d.setdefault("daily_budget_usd", 0.0)      # hard daily cap on paid spend; 0 = no cap
     return d
 
 
