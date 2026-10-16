@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+services:
+  router:
+    build: .
+    ports: ["8080:8080"]
+    env_file: .env
+    volumes:
+      - router-data:/data              # learned routing scores + cache survive restarts
+      - ./config:/app/config:ro        # edit models.yaml without rebuilding
+      - ./skills:/app/skills:ro
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+volumes:
+  router-data:
