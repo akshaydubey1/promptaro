@@ -1,0 +1,57 @@
+# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Akshay Smart Router configuration. Author: Akshay Dubey
+#
+# You normally don't edit this file. Models, prices and context sizes are
+# pulled live (see `catalog`), and connections are made from the web page.
+# Edit only if you want to change behaviour.
+
+defaults:
+  max_output_tokens: 4096
+  request_timeout_s: 120
+
+catalog:
+  enabled: true
+  vendors: all                           # every model family on the market (or a list, e.g. [anthropic, openai])
+  max_vendors: 30                        # cap on families when vendors is "all"
+  per_vendor_recent: 8                   # consider each vendor's 8 newest models
+  refresh_s: 86400                       # refresh prices/models daily
+  ollama: auto                           # use local Ollama models if Ollama is running
+  vendor_bias: {}                        # override starting trust per family, e.g. {deepseek: 0.0}
+
+# Extra models you add by hand (custom endpoints, vLLM, LM Studio, ...).
+models:
+  # Always-available fallback so the app works with nothing connected.
+  - id: offline
+    provider: offline
+    model: offline-echo
+    tier: 0
+    context_window: 1000000
+    capabilities: [json, tools, long_context]
+    price: {input: 0.0, output: 0.0}
+    latency_ms_p50: 1
+    fallback_only: true
+    prior: {coding: 0.10, research: 0.10, writing: 0.10, document: 0.10, data: 0.10, chat: 0.10}
+
+# Quality bar per task type. The router picks the cheapest/fastest model whose
+# expected quality clears the bar; checks + escalation catch misses.
+quality_targets:
+  coding: 0.85
+  research: 0.80
+  writing: 0.75
+  document: 0.78
+  data: 0.80
+  chat: 0.70
+
+# How to trade money vs. waiting when several models clear the bar.
+weights:
+  cost_per_usd: 40.0
+  latency_per_s: 0.02
+
+routing:
+  max_attempts: 3               # first try + up to 2 escalations
+  cross_review: auto            # off | auto | always  (auto = only for high-complexity work)
+  cross_review_complexity: 0.75
+  llm_classifier_below_confidence: 0.0
+  context_budget_tokens: 24000
+  cache_ttl_s: 86400
+  run_generated_code: true

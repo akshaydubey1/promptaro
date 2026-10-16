@@ -1,0 +1,207 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Router</title>
+<!-- Akshay Smart Router — Author: Akshay Dubey -->
+<style>
+:root{
+  --bg:#f6f5f2; --panel:#ffffff; --ink:#1b1b1a; --muted:#6b6a66; --line:#e3e1db;
+  --accent:#2f5d50; --accent-ink:#ffffff; --ok:#2f7a4b; --bad:#b4442f; --chip:#eeece6;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#141413; --panel:#1d1d1b; --ink:#ecebe6; --muted:#9b9a94; --line:#2f2e2b;
+         --accent:#7fb8a4; --accent-ink:#0f1a16; --ok:#7cc79a; --bad:#e58a76; --chip:#262624; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:24px}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+h2{font-size:15px;margin:0 0 12px;font-weight:600}
+.sub{color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+button,.btn{font:inherit;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);
+  padding:8px 14px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+button.primary,.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.big{padding:12px 20px;font-size:16px}
+textarea,input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;width:100%}
+textarea{min-height:110px;resize:vertical}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:180px}
+.conn{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.conn:first-child{border-top:0}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}
+.dot.on{background:var(--ok)}
+.chip{background:var(--chip);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--muted)}
+.out{white-space:pre-wrap;font-family:var(--mono);font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:14px;max-height:60vh;overflow:auto}
+.meta{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.ok{color:var(--ok)} .bad{color:var(--bad)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 4px;border-top:1px solid var(--line)}
+th{color:var(--muted);font-weight:500}
+.banner{padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:14px}
+.banner.err{background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.banner.good{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.hidden{display:none}
+.steps{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:13px}
+@media (max-width:560px){ td:nth-child(3),th:nth-child(3){display:none} }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Smart Router</h1>
+    <span class="sub" id="storage"></span>
+  </header>
+
+  <div id="banner"></div>
+
+  <!-- First-run: connect -->
+  <section class="card hidden" id="welcome">
+    <h2>Connect your AI accounts</h2>
+    <p class="sub" style="margin-top:0">Sign in once. Claude, GPT and Gemini all become available, and the router picks between them for each task. Your key is stored securely on this computer and never shown again.</p>
+    <a class="btn primary big" href="/connect/openrouter/start">Sign in with OpenRouter</a>
+    <ol class="steps">
+      <li>You'll log in (or sign up) on openrouter.ai and approve access.</li>
+      <li>Add a few dollars of credit there if your account is new.</li>
+      <li>You come straight back here, ready to use.</li>
+    </ol>
+  </section>
+
+  <!-- Ask -->
+  <section class="card hidden" id="ask">
+    <h2>What do you need?</h2>
+    <textarea id="instruction" placeholder="e.g. Write a Terraform module for a private GKE cluster with pinned provider versions"></textarea>
+    <details style="margin-top:10px"><summary>Add context (paste a file, logs, notes)</summary>
+      <textarea id="context" style="margin-top:8px" placeholder="Optional. Only the relevant parts are sent to the model."></textarea>
+    </details>
+    <div class="row" style="margin-top:12px">
+      <select id="prefer" style="width:auto">
+        <option value="balanced">Balanced</option>
+        <option value="cheap">Cheapest</option>
+        <option value="fast">Fastest</option>
+        <option value="best">Best quality</option>
+      </select>
+      <span class="grow"></span>
+      <button class="primary" id="run">Run</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="result">
+    <div class="meta" id="meta"></div>
+    <div class="out" id="output"></div>
+    <div class="row" style="margin-top:10px"><button id="copy">Copy</button></div>
+    <details style="margin-top:12px"><summary>How it was routed</summary><div class="out" id="trace" style="margin-top:8px"></div></details>
+  </section>
+
+  <!-- Connections -->
+  <section class="card" id="connections">
+    <h2>Connections</h2>
+    <div id="connlist"></div>
+    <details style="margin-top:8px"><summary>Models in use</summary>
+      <table style="margin-top:8px"><thead><tr><th>Model</th><th>Via</th><th>$ / 1M in · out</th><th>Size</th></tr></thead><tbody id="models"></tbody></table>
+      <div class="row" style="margin-top:10px"><button id="refresh">Refresh models &amp; prices</button></div>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function banner(kind, text){ $('banner').innerHTML = text ? `<div class="banner ${kind}">${esc(text)}</div>` : ''; }
+
+async function load(){
+  const s = await (await fetch('/connect/status')).json();
+  $('storage').textContent = s.storage === 'os-keychain' ? 'Keys stored in your system keychain' : 'Keys stored in a private file in your home folder';
+  const anyConnected = Object.values(s.connections).some(c => c.connected) || s.ollama.length > 0;
+  $('welcome').classList.toggle('hidden', anyConnected);
+  $('ask').classList.toggle('hidden', !anyConnected);
+
+  const rows = [];
+  for (const [v, c] of Object.entries(s.connections)){
+    if (v === 'openrouter'){
+      rows.push(`<div class="conn"><span class="dot ${c.connected?'on':''}"></span><strong class="grow">${esc(c.label)}</strong>
+        ${c.connected ? `<span class="chip">Connected</span><button data-off="${v}">Disconnect</button>`
+                      : `<a class="btn primary" href="/connect/openrouter/start">Sign in</a>`}</div>`);
+    } else {
+      rows.push(`<div class="conn"><span class="dot ${c.connected?'on':''}"></span><span class="grow"><strong>${esc(c.label)}</strong>
+        <span class="sub"> · optional, direct (no OpenRouter fee)</span></span>
+        ${c.connected ? `<span class="chip">Connected</span><button data-off="${v}">Disconnect</button>`
+          : `<a class="btn" href="${esc(c.get_key_url)}" target="_blank" rel="noopener">Get key ↗</a>
+             <input type="password" autocomplete="off" placeholder="Paste key" data-key="${v}" style="width:200px">
+             <button data-on="${v}">Connect</button>`}</div>`);
+    }
+  }
+  rows.push(`<div class="conn"><span class="dot ${s.ollama.length?'on':''}"></span><span class="grow"><strong>Ollama (local models)</strong>
+     <span class="sub"> · ${s.ollama.length ? esc(s.ollama.join(', ')) : 'not running — detected automatically when it is'}</span></span></div>`);
+  $('connlist').innerHTML = rows.join('');
+
+  $('models').innerHTML = s.models.length ? s.models.sort((a,b)=>a.tier-b.tier).map(m =>
+    `<tr><td>${esc(m.name)}</td><td>${esc(m.via)}</td><td>${m.price_per_1m.input} · ${m.price_per_1m.output}</td><td>${['','small','medium','large'][m.tier]||''}</td></tr>`).join('')
+    : `<tr><td colspan="4" class="sub">No models yet — connect an account above.</td></tr>`;
+}
+
+document.addEventListener('click', async e => {
+  const on = e.target.dataset.on, off = e.target.dataset.off;
+  if (on){
+    const inp = document.querySelector(`input[data-key="${on}"]`);
+    if (!inp.value.trim()) return inp.focus();
+    e.target.disabled = true; e.target.textContent = 'Checking…';
+    const r = await fetch(`/connect/${on}`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key: inp.value})});
+    inp.value = '';
+    if (r.ok) banner('good', 'Connected.');
+    else { const d = (await r.json()).detail; banner('err', typeof d === 'string' ? d : `${d.message} (${d.detail})`); }
+    load();
+  }
+  if (off){
+    await fetch(`/connect/${off}`, {method:'DELETE'});
+    banner('good', 'Disconnected and removed from storage.'); load();
+  }
+});
+
+$('refresh').onclick = async () => { $('refresh').disabled = true; await fetch('/connect/refresh', {method:'POST'}); $('refresh').disabled = false; load(); };
+
+$('run').onclick = async () => {
+  const instruction = $('instruction').value.trim();
+  if (!instruction) return $('instruction').focus();
+  $('run').disabled = true; $('run').textContent = 'Working…';
+  $('result').classList.remove('hidden'); $('output').textContent = ''; $('meta').innerHTML = '<span class="chip">Routing…</span>';
+  try{
+    const r = await fetch('/v1/run', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({instruction, context: $('context').value, prefer: $('prefer').value})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Request failed');
+    const t = d.totals;
+    $('meta').innerHTML = [
+      `<span class="chip">${esc(d.model || '—')}</span>`,
+      `<span class="chip ${d.passed?'ok':'bad'}">${d.passed ? 'Passed checks' : 'Did not pass checks'}</span>`,
+      `<span class="chip">${esc(d.profile.task_type)}</span>`,
+      `<span class="chip">$${t.cost_usd.toFixed(4)}</span>`,
+      `<span class="chip">${(t.total_ms/1000).toFixed(1)} s</span>`,
+      `<span class="chip">${t.model_calls} call${t.model_calls===1?'':'s'}</span>`,
+      d.cached ? '<span class="chip">from cache</span>' : ''
+    ].join('');
+    $('output').textContent = d.output;
+    $('trace').textContent = JSON.stringify({profile:d.profile, route:d.route, skills:d.skills, context:d.context,
+      attempts:d.attempts.map(a=>({model:a.model, kind:a.kind, passed:a.passed, reasons:a.reasons, cost_usd:a.cost_usd, error:a.error}))}, null, 2);
+  } catch(err){ $('meta').innerHTML = ''; $('output').textContent = String(err.message || err); }
+  $('run').disabled = false; $('run').textContent = 'Run';
+};
+$('instruction').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('run').click(); });
+$('copy').onclick = () => navigator.clipboard.writeText($('output').textContent);
+
+const q = new URLSearchParams(location.search);
+if (q.get('error')) banner('err', q.get('error'));
+if (q.get('connected')) banner('good', 'Signed in. You can start asking now.');
+if (q.toString()) history.replaceState(null, '', '/');
+load();
+</script>
+</body>
+</html>
