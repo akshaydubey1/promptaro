@@ -48,31 +48,103 @@ _SAFE = re.compile(r"""^\s*(
     terraform\s+(fmt|validate)|tflint|helm\s+(lint|template)|kubectl\s+(get|describe|diff)|
     docker\s+(ps|images)|shellcheck|hadolint|yamllint
 )(\s|$)""", re.X)
-_NEVER = re.compile(r"(\bsudo\b|rm\s+-rf\s+(/|~)(\s|$)|:\(\)\s*\{|\bmkfs\b|\bdd\s+if=|>\s*/dev/sd)")
+_NEVER = re.compile(
+    r"(\bsudo\b|\bdoas\b|\bsu\s+-|rm\s+-[a-z]*[rf][a-z]*\s+(-\S+\s+)*(/|~|\$HOME|\.(\s|$))|:\(\)\s*\{"
+    r"|\bmkfs|\bdd\s+if=|\bshred\b|>\s*/dev/sd|\bchmod\s+-R\b|\bchown\s+-R\b|\bgit\s+clean\b"
+    r"|\bformat\b\s+[a-z]:|\bdel\s+/[fsq]|\brd\s+/s\b|\brmdir\s+/s\b)", re.I)
+_SPLIT = re.compile(r"&&|\|\||;|\||&|\n")
+_SUBST = re.compile(r"`|\$\(|<\(|>\(")
+_REDIR = re.compile(r"(?:^|[^>&])>>?\s*([^\s;&|><]+)")          # > / >> targets (not >&)
+_READ_ANYWHERE = re.compile(r"^\s*(cat|head|tail|wc|grep|rg|find|ls|tree|diff|sort|uniq|stat|file|du)\b")
 
 
-def needs_approval(command: str, policy: str) -> bool | None:
+def _inside_root(target: str, root: Path | None) -> bool | None:
+    """Is a path argument inside the workspace? /dev/* devices are fine.
+    Returns None when no workspace is known and the path can't be vetted."""
+    if root is None:
+        return None
+    t = target.strip().strip("'\"")
+    if t.startswith(("~", "$HOME", "${HOME")):
+        return False
+    try:
+        full = Path(os.path.expandvars(t))
+        full = full if full.is_absolute() else (root / full)
+        full = full.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if str(full).startswith(("/dev/", "NUL")):
+        return True
+    return full == root or root in full.parents
+
+
+def _reads_paths_outside(part: str, root: Path | None) -> bool:
+    """A 'safe' read command (cat, grep, find, ...) pointing at files outside the workspace."""
+    if root is None or not _READ_ANYWHERE.match(part):
+        return False
+    for tok in part.split()[1:]:
+        if tok.startswith("-") or tok == "--":
+            continue
+        if "/" not in tok and "~" not in tok and "$" not in tok:
+            continue
+        if _inside_root(tok, root) is False:
+            return True
+    return False
+
+
+def needs_approval(command: str, policy: str, root: Path | None = None) -> bool | None:
     """True = ask the user, False = run, None = refuse outright."""
     if _NEVER.search(command):
         return None
+    if _SUBST.search(command):
+        # Command/process substitution can smuggle anything past the safe list.
+        return True if policy != "never_ask" else False
+    for target in _REDIR.findall(command):
+        inside = _inside_root(target, root)
+        if inside is False:
+            # Provably outside the workspace: ask, or refuse outright when unattended.
+            return True if policy != "never_ask" else None
+        if inside is None:
+            # No workspace to vet against: ask, unless the user opted out of asking.
+            return True if policy != "never_ask" else False
     if policy == "never_ask":
         return False
     if policy == "always_ask":
         return True
-    if "`" in command or "$(" in command or re.search(r"(^|[^>])>(?!&)", command):
-        return True                                  # substitution or file redirection
     if re.search(r"\bfind\b.*\s-(delete|exec|execdir|ok)\b|\bgit\s+branch\s+.*-[dDmM]\b", command):
         return True
-    parts = [p for p in re.split(r"&&|\|\||;|\|", command) if p.strip()]
-    return not all(_SAFE.match(p) for p in parts)
+    parts = [p.strip() for p in _SPLIT.split(command) if p.strip()]
+    if not parts:
+        return False
+    for p in parts:
+        if not _SAFE.match(p):
+            return True
+        if _reads_paths_outside(p, root):
+            return True
+    return False
+
+
+_NAME_DROP = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDS|_PAT\b|\bPAT_|_DSN\b|\bDSN|"
+                        r"MYSQL_PWD|PGPASS|_AUTH\b|\bAUTH_|SSH_|_PRIVATE|CERT_)", re.I)
+_URL_CRED = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s@]+@", re.I)
 
 
 def _clean_env() -> dict:
-    drop = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.I)
-    env = {k: v for k, v in os.environ.items() if not drop.search(k)}
+    env = {k: v for k, v in os.environ.items()
+           if not _NAME_DROP.search(k) and not _URL_CRED.search(v)}
     env.update({"CI": "1", "GIT_TERMINAL_PROMPT": "0", "PAGER": "cat", "GIT_PAGER": "cat", "NO_COLOR": "1",
                 "PYTHONDONTWRITEBYTECODE": "1"})
     return env
+
+
+_SECRET_TEXT = re.compile(
+    r"(sk-or-v1-[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|"
+    r"gsk_[A-Za-z0-9]{16,}|csk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{16,}|"
+    r"xox[bap]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+
+
+def redact(text: str) -> str:
+    """Provider errors sometimes echo the key that was sent — never show them."""
+    return _SECRET_TEXT.sub(lambda m: m.group(0)[:7] + "…", str(text))
 
 
 def clip(text: str, limit: int = MAX_OUT) -> str:
@@ -103,7 +175,7 @@ class Workspace:
         full = (self.root / p).resolve()
         if full != self.root and self.root not in full.parents:
             raise ToolError(f"'{p}' is outside the project folder")
-        if any(part == ".git" for part in full.relative_to(self.root).parts):
+        if any(part.lower() == ".git" for part in full.relative_to(self.root).parts):
             raise ToolError("the .git folder is off limits")
         return full
 
@@ -183,16 +255,20 @@ class Workspace:
     # -------------------------------------------------------------- run
     async def run(self, command: str, timeout: int = 120) -> ToolResult:
         timeout = max(5, min(int(timeout or 120), 900))
+        kwargs = {"start_new_session": True} if os.name == "posix" else {}
         proc = await asyncio.create_subprocess_shell(
             command, cwd=self.root, env=_clean_env(), stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL, start_new_session=True)
+            stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL, **kwargs)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout)
             code = proc.returncode
         except asyncio.TimeoutError:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)      # kill the whole pipeline, not just the shell
+                else:
+                    proc.kill()                            # Windows has no killpg
+            except (ProcessLookupError, PermissionError):
                 pass
             await proc.wait()
             return ToolResult(False, f"Timed out after {timeout}s", {"exit_code": None, "timeout": True})

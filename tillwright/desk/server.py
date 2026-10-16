@@ -45,9 +45,13 @@ desk: Desk | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global desk
+    _private_dir(DATA)                                   # sessions, worktrees, caches — keep to this user
+    _private_dir(gitops.HOME / "worktrees")
     router = Router(Path(os.environ.get("SMART_ROUTER_ROOT", ROUTER_ROOT)), db_path=os.environ.get("ROUTER_DB"))
     app.state.router = router
     desk = Desk(router, Store(os.environ.get("TILLWRIGHT_DB", DATA / "desk.db")))
+    if "TILLWRIGHT_DB" not in os.environ:
+        _private_file(DATA / "desk.db")
     yield
     for t in list(desk.tasks.values()):
         t.cancel()
@@ -59,12 +63,24 @@ _hosts = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=[h.strip() for h in _hosts if h.strip()])
 
 
+def _private_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        os.chmod(p, 0o700)
+
+
+def _private_file(p: Path) -> None:
+    if os.name == "posix" and p.exists():
+        os.chmod(p, 0o600)
+
+
 @app.middleware("http")
 async def require_app_header(request: Request, call_next):
     """Blocks cross-site requests: a web page can't add this header without a
-    CORS preflight, which this server never approves."""
+    CORS preflight, which this server never approves. Both the current
+    (x-promptaro) and legacy (x-tillwright) names are accepted during migration."""
     if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path.startswith(("/api/", "/connect/")) \
-            and request.headers.get("x-tillwright") != "1":
+            and request.headers.get("x-tillwright") != "1" and request.headers.get("x-promptaro") != "1":
         from fastapi.responses import JSONResponse
         return JSONResponse({"detail": "Missing X-Tillwright header"}, status_code=403)
     return await call_next(request)
@@ -508,9 +524,21 @@ async def pick_folder():
     return {"path": p.rstrip("/\\") if len(p) > 3 else p}
 
 
+@app.post("/api/stream-key")
+async def stream_key():
+    """Token for the SSE stream, handed out only to requests carrying the app header."""
+    from router.gateway import gateway_token
+    return {"key": gateway_token()}
+
+
 @app.get("/api/stream")
-async def stream(request: Request):
-    """One live stream for everything; the UI filters by session."""
+async def stream(request: Request, key: str = ""):
+    """One live stream for everything; the UI filters by session. EventSource can't send
+    headers, so the same token that guards the gateway authenticates the stream instead."""
+    from router.gateway import gateway_token
+    import secrets as _sec
+    if not _sec.compare_digest(key, gateway_token()):
+        raise HTTPException(401, "The event stream needs a stream key.")
     q = desk.store.subscribe("*")
 
     async def gen():

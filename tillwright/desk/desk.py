@@ -13,6 +13,7 @@ from router.engine import Router, RunRequest
 from . import gitops
 from .agent import AgentRun
 from .store import Store
+from .tools import redact
 from .workers import HARD_TASK, MODEL_IDS, RUNNERS, usable_engines
 
 CHAT_HISTORY_TURNS = 8
@@ -127,7 +128,7 @@ class Desk:
                 "via": spec.extra.get("via", "") if spec else "", "retry": retry_of is not None,
                 "offline": (res.model == "offline")})
         except Exception as e:
-            self.store.emit(sid, "error", {"text": str(e)[:500]})
+            self.store.emit(sid, "error", {"text": redact(e)[:500]})
         finally:
             self.store.update(sid, status="idle")
 
@@ -278,8 +279,11 @@ class Desk:
 
     # ------------------------------------------------- manual (no-AI) tools
     async def manual_run(self, sid: str, command: str) -> dict:
-        from .tools import Workspace
+        from .tools import Workspace, needs_approval
         s = self.store.get(sid)
+        if needs_approval(command, "never_ask", Path(s["worktree"])) is None:
+            self.store.emit(sid, "note", {"text": "That command is blocked for safety."})
+            return {"ok": False, "blocked": True}
         self.store.emit(sid, "tool_call", {"action": "run", "args": {"command": command}, "manual": True})
         res = await Workspace(s["worktree"]).run(command, 300)
         self.store.emit(sid, "tool_result", {"action": "run", "ok": res.ok, "output": res.output, "manual": True})

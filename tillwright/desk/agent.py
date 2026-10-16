@@ -25,12 +25,12 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from router import catalog
+from router import catalog, quota
 from router.classifier import classify
 from router.providers import ProviderError
 from router.selector import route
 
-from .tools import TOOL_DOCS, ToolError, Workspace, clip, needs_approval
+from .tools import TOOL_DOCS, ToolError, Workspace, clip, needs_approval, redact
 
 if TYPE_CHECKING:
     from .desk import Desk
@@ -190,7 +190,7 @@ class AgentRun:
             cmd = str(args.get("command", "")).strip()
             if not cmd:
                 raise ToolError("command is required")
-            need = needs_approval(cmd, self.s.get("approval") or "ask_risky")
+            need = needs_approval(cmd, self.s.get("approval") or "ask_risky", self.ws.root)
             if need is None:
                 raise ToolError("That command is blocked for safety.")
             if need and not await self._approve(cmd):
@@ -243,21 +243,39 @@ class AgentRun:
                 break
 
             self.messages = compact(self.messages)
+            res = None
+            if spec.extra.get("quota"):
+                # Reserve free-allowance space up front so concurrent runs can't overshoot it.
+                est = sum(len(m["content"]) for m in self.messages) // 4 + 6000
+                ok, why, res = quota.LEDGER.begin(spec, est)
+                if not ok:
+                    if self.level < ladder_len - 1:
+                        self.level += 1
+                        store.emit(sid, "note", {"text": f"{spec.id}: {why} Trying the next option."})
+                        continue
+                    store.emit(sid, "finish", {"summary": f"Stopped: {why} Connect a paid provider or wait for "
+                                                          "the free allowance to reset.", "tests": "not_run"})
+                    break
             t0 = time.perf_counter()
             try:
                 comp = await r.providers[spec.provider].complete(spec, self.state["system"], "", 6000,
                                                                  messages=self.messages)
                 r.registry.breaker.record(spec.id, True)
                 errors = 0
-                if spec.extra.get("free"):
+                if spec.extra.get("quota"):
+                    quota.LEDGER.settle(res, spec, comp.tokens_in + comp.tokens_out, comp.headers)
+                elif spec.extra.get("free"):
                     catalog.FREE.note_used()
             except (ProviderError, Exception) as e:            # network, auth, rate limit
-                if spec.extra.get("free") and "429" in str(e):
-                    catalog.FREE.note_rate_limited(str(e))      # free allowance: route around it next step
+                quota.LEDGER.abandon(res)
+                if quota.after_error(spec, e):
+                    pass                                        # free allowance: route around it next step
+                elif spec.extra.get("free") and "429" in str(e):
+                    catalog.FREE.note_rate_limited(str(e))
                 else:
                     r.registry.breaker.record(spec.id, False)
                 errors += 1
-                store.emit(sid, "error", {"text": f"{spec.id}: {str(e)[:300]}"})
+                store.emit(sid, "error", {"text": f"{spec.id}: {redact(e)[:300]}"})
                 if errors >= 3:
                     store.emit(sid, "finish", {"summary": "Stopped: model calls keep failing. Check Connections.",
                                                "tests": "not_run"})
@@ -267,11 +285,9 @@ class AgentRun:
                 await asyncio.sleep(1.5 * errors)
                 continue
 
-            cost = spec.cost(comp.tokens_in - comp.cached_tokens, comp.tokens_out) + \
-                spec.cost(comp.cached_tokens, 0) * 0.1           # cached input is ~10x cheaper
+            cost = spec.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.add_usage(sid, cost, comp.tokens_in, comp.tokens_out)
-            top = strongest.cost(comp.tokens_in - comp.cached_tokens, comp.tokens_out) + \
-                strongest.cost(comp.cached_tokens, 0) * 0.1
+            top = strongest.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.bump(spent=cost, saved=max(0.0, top - cost), tokens=comp.tokens_in + comp.tokens_out, agent_steps=1)
             action, err = parse_action(comp.text)
             r.store.record(request_id=sid, model_id=spec.id, task_type="coding", complexity=prof.complexity,
