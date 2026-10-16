@@ -36,8 +36,13 @@ class ModelSpec:
             return True
         return secrets.has(self.api_key_env)
 
-    def cost(self, tokens_in: int, tokens_out: int) -> float:
-        return tokens_in / 1e6 * self.price_in + tokens_out / 1e6 * self.price_out
+    def cost(self, tokens_in: int, tokens_out: int, cached_in: int = 0) -> float:
+        """cached_in: prompt tokens served from the provider's cache, billed at a discount
+        (Anthropic cache reads ~0.1x input price; OpenAI-compatible ~0.5x)."""
+        cached_in = min(cached_in, tokens_in)
+        mult = 0.1 if self.provider == "anthropic" else 0.5
+        return (tokens_in - cached_in + cached_in * mult) / 1e6 * self.price_in \
+            + tokens_out / 1e6 * self.price_out
 
 
 class CircuitBreaker:

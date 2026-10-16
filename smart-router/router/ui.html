@@ -154,19 +154,19 @@ document.addEventListener('click', async e => {
     const inp = document.querySelector(`input[data-key="${on}"]`);
     if (!inp.value.trim()) return inp.focus();
     e.target.disabled = true; e.target.textContent = 'Checking…';
-    const r = await fetch(`/connect/${on}`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({key: inp.value})});
+    const r = await fetch(`/connect/${on}`, {method:'POST', headers:{'content-type':'application/json','x-promptaro':'1'}, body: JSON.stringify({key: inp.value})});
     inp.value = '';
     if (r.ok) banner('good', 'Connected.');
     else { const d = (await r.json()).detail; banner('err', typeof d === 'string' ? d : `${d.message} (${d.detail})`); }
     load();
   }
   if (off){
-    await fetch(`/connect/${off}`, {method:'DELETE'});
+    await fetch(`/connect/${off}`, {method:'DELETE', headers:{'x-promptaro':'1'}});
     banner('good', 'Disconnected and removed from storage.'); load();
   }
 });
 
-$('refresh').onclick = async () => { $('refresh').disabled = true; await fetch('/connect/refresh', {method:'POST'}); $('refresh').disabled = false; load(); };
+$('refresh').onclick = async () => { $('refresh').disabled = true; await fetch('/connect/refresh', {method:'POST', headers:{'x-promptaro':'1'}}); $('refresh').disabled = false; load(); };
 
 $('run').onclick = async () => {
   const instruction = $('instruction').value.trim();
@@ -174,7 +174,7 @@ $('run').onclick = async () => {
   $('run').disabled = true; $('run').textContent = 'Working…';
   $('result').classList.remove('hidden'); $('output').textContent = ''; $('meta').innerHTML = '<span class="chip">Routing…</span>';
   try{
-    const r = await fetch('/v1/run', {method:'POST', headers:{'content-type':'application/json'},
+    const r = await fetch('/v1/run', {method:'POST', headers:{'content-type':'application/json','x-promptaro':'1'},
       body: JSON.stringify({instruction, context: $('context').value, prefer: $('prefer').value})});
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Request failed');
