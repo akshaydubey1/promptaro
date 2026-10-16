@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -117,10 +118,22 @@ class Router:
         self.run_code = bool(r.get("run_generated_code", True))
         quota.use(catalog.HOME / "ledger.json")
         self.usage_listeners: list = []          # called with (spec, tokens_in, tokens_out, cost, top_cost, source)
+        self._spend_cache = (0.0, 0.0)           # (refetch_at, today's spend) — budget check stays off the DB
+
+    def _daily_budget_left(self) -> float:
+        """Dollars still available today under the daily cap; inf when no cap is set."""
+        cap = float(catalog.get_settings().get("daily_budget_usd") or 0)
+        if cap <= 0:
+            return math.inf
+        now = time.time()
+        if now >= self._spend_cache[0]:
+            self._spend_cache = (now + 5, self.store.spend_today())
+        return max(0.0, cap - self._spend_cache[1])
 
     def notify_usage(self, spec, tin: int, tout: int, source: str = "gateway") -> None:
         """Tell the app about usage that didn't go through run() (e.g. the coding-tools gateway)."""
         cost = spec.cost(tin, tout)
+        self.store.add_spend(cost)
         paid = [m for m in self.registry.usable() if m.provider != "offline" and not m.extra.get("free")]
         top = max(paid, key=lambda m: (m.tier, m.price_out), default=None)
         top_cost = top.cost(tin, tout) if top else cost
@@ -250,6 +263,9 @@ class Router:
         max_out = min(int(self.registry.defaults.get("max_output_tokens", 4096)),
                       int(_OUT_BUDGET.get(profile.task_type, 1000) * (0.8 + 1.6 * profile.complexity)))
         ladder = [decision.primary] + trim_ladder(decision.ladder, self.max_attempts - 1)
+        # The effective cap is whichever binds first: this request's cap, or the daily budget.
+        budget_cap = req.max_cost_usd if req.max_cost_usd is not None else math.inf
+        budget_cap = min(budget_cap, self._daily_budget_left())
         spent = 0.0
         feedback = ""
         best: tuple[float, str, str] | None = None   # (score, text, model)
@@ -257,8 +273,7 @@ class Router:
 
         for i, cand in enumerate(ladder):
             m: ModelSpec = cand.model
-            if req.max_cost_usd is not None and m.id != req.force_model \
-                    and spent + cand.est_cost > req.max_cost_usd:
+            if m.id != req.force_model and spent + cand.est_cost > budget_cap:
                 blocked_by_budget = True
                 continue                                 # hard budget: try a cheaper rung, else stop
             free = bool(m.extra.get("free"))
@@ -303,6 +318,7 @@ class Router:
 
             cost = m.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             spent += cost
+            self.store.add_spend(cost)
             # Checks can run pytest (subprocess): keep them off the event loop.
             chk = await asyncio.to_thread(ck.run_checks, profile, req.instruction, comp.text,
                                           comp.stop_reason, req.tests, self.run_code)
@@ -311,11 +327,12 @@ class Router:
             result.attempts.append(att)
 
             if chk.passed and self._should_review(req, profile, m):
-                left = (req.max_cost_usd - spent) if req.max_cost_usd is not None else None
+                left = (budget_cap - spent) if math.isfinite(budget_cap) else None
                 ok, issues, rev = await self._review(req, m, comp.text, budget_left=left)
                 if rev:
                     result.attempts.append(rev)
                     spent += rev.cost_usd
+                    self.store.add_spend(rev.cost_usd)
                 if not ok:
                     chk.passed = False
                     chk.reasons = ["cross-review: " + x for x in issues] or ["cross-review rejected"]
@@ -344,8 +361,12 @@ class Router:
         if not result.passed and best:
             result.output, result.model = best[1], best[2]
         elif not result.attempts and blocked_by_budget:
-            result.output = (f"Stopped before spending: no suitable model fits this request's "
-                             f"${req.max_cost_usd:.4f} budget.")
+            cap = float(catalog.get_settings().get("daily_budget_usd") or 0)
+            result.output = (f"Stopped before spending: today's ${cap:.2f} budget is used up. "
+                             "Free models may still work; raise the daily cap in Connections."
+                             if cap and budget_cap <= 0 else
+                             f"Stopped before spending: no suitable model fits the remaining "
+                             f"${budget_cap:.4f} budget.")
         result.total_ms = (time.perf_counter() - t_start) * 1000
         return result
 

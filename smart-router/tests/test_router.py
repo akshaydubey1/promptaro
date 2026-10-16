@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import statistics
 import time
 from pathlib import Path
@@ -129,6 +130,24 @@ def test_budget_stops_escalation(make_router):
     res = run(r, instruction="write a python function add(a, b)", max_cost_usd=0.005, use_cache=False)
     assert not res.passed
     assert fake.calls == ["claude-haiku"]
+
+
+def test_spend_is_recorded_and_budget_left_is_open_without_cap(make_router):
+    r, _ = make_router({"claude-haiku": ["Hello!"]})
+    run(r, instruction="say hello", use_cache=False)
+    assert r.store.spend_today() > 0
+    assert r._daily_budget_left() == math.inf          # no cap configured
+
+
+def test_daily_budget_blocks_paid_models_when_used_up(make_router, monkeypatch):
+    from router import catalog
+    r, fake = make_router({"claude-haiku": ["Hello!"]})
+    r.store.add_spend(1.0)
+    monkeypatch.setattr(catalog, "get_settings",
+                        lambda: {"daily_budget_usd": 0.5, "free_models": "chat", "gateway_spend": "free"})
+    res = run(r, instruction="say hello", use_cache=False)
+    assert not res.passed and "budget" in res.output
+    assert fake.calls == []                            # nothing paid was even attempted
 
 
 # ------------------------------------------------------------ cache, learning
