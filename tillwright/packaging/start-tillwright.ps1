@@ -37,7 +37,9 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 $py = Join-Path $Here ".venv\Scripts\python.exe"
 $stamp = Join-Path $Here ".venv\.installed"
-if (-not (Test-Path $py) -or ((Get-Item "requirements.txt").LastWriteTime -gt (Get-Item $stamp -ErrorAction SilentlyContinue).LastWriteTime)) {
+$stampTime = [datetime]::MinValue                              # a missing stamp always means "reinstall"
+if (Test-Path $stamp) { $stampTime = (Get-Item $stamp).LastWriteTime }
+if (-not (Test-Path $py) -or (Get-Item "requirements.txt").LastWriteTime -gt $stampTime) {
   Write-Host "Setting up Tillwright (one time)..."
   uv venv --quiet --python 3.12 .venv *>> $Log
   uv pip install --quiet --python $py -r requirements.txt *>> $Log
