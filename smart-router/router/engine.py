@@ -1,0 +1,345 @@
+# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+"""The router: one instruction in, a checked result out. Author: Akshay Dubey
+
+Flow:
+  classify -> choose model + escalation ladder -> pick skills -> trim context
+  -> cache lookup -> call model -> run checks -> (optional cross-review)
+  -> escalate on failure -> record outcome (improves future routing) -> cache
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+import httpx
+
+from . import catalog, quota
+from . import checks as ck
+from .classifier import TASK_TYPES, TaskProfile, classify
+from .context import fit_context
+from .providers import Completion, Provider, ProviderError, build_providers
+from .registry import ModelSpec, Registry
+from .selector import route, trim_ladder
+from .skills import SkillLibrary
+from .store import Store
+
+BASE_SYSTEM = ("You are a precise, efficient assistant. Do exactly what the task asks, no more. "
+               "Be concise: no preamble, no restating the question.")
+
+_OUT_BUDGET = {"coding": 1800, "research": 1600, "writing": 1000, "document": 1500, "data": 1200, "chat": 500}
+
+
+@dataclass
+class RunRequest:
+    instruction: str
+    context: str = ""
+    has_images: bool = False
+    tests: str | None = None                 # optional pytest code the result must pass
+    prefer: str = "balanced"                 # balanced | cheap | fast | best
+    quality_target: float | None = None
+    max_cost_usd: float | None = None
+    force_model: str | None = None
+    use_cache: bool = True
+    cross_review: str | None = None          # override config: off | auto | always
+    dry_run: bool = False                    # route only, don't call a model
+    allow_free: bool | None = None           # None = follow the "free models" setting
+    system_extra: str = ""                   # caller-supplied instructions (e.g. app help)
+    exclude: tuple[str, ...] = ()            # models not to use (e.g. one the user just rated down)
+    private: bool = False                    # code: skip free providers that may train on prompts
+
+
+@dataclass
+class Attempt:
+    model: str
+    passed: bool
+    score: float
+    reasons: list[str]
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+    latency_ms: float
+    kind: str = "generate"                   # generate | review
+    error: str | None = None
+
+
+@dataclass
+class RunResult:
+    request_id: str
+    output: str
+    model: str | None
+    passed: bool
+    profile: dict
+    route: dict
+    skills: list[str]
+    context: dict
+    attempts: list[Attempt] = field(default_factory=list)
+    routing_ms: float = 0.0
+    total_ms: float = 0.0
+    cached: bool = False
+
+    @property
+    def total_cost(self) -> float:
+        return sum(a.cost_usd for a in self.attempts)
+
+    def as_dict(self) -> dict:
+        return {
+            "request_id": self.request_id, "output": self.output, "model": self.model,
+            "passed": self.passed, "cached": self.cached,
+            "totals": {"cost_usd": round(self.total_cost, 6),
+                       "tokens_in": sum(a.tokens_in for a in self.attempts),
+                       "tokens_out": sum(a.tokens_out for a in self.attempts),
+                       "model_calls": len(self.attempts),
+                       "routing_ms": round(self.routing_ms, 3), "total_ms": round(self.total_ms, 1)},
+            "profile": self.profile, "route": self.route, "skills": self.skills, "context": self.context,
+            "attempts": [a.__dict__ for a in self.attempts],
+        }
+
+
+class Router:
+    def __init__(self, root: str | Path = ".", db_path: str | Path | None = None,
+                 providers: dict[str, Provider] | None = None, use_catalog: bool = True):
+        root = Path(root)
+        self._cfg_path, self._use_catalog = root / "config" / "models.yaml", use_catalog
+        self.registry = Registry(self._cfg_path, use_catalog)
+        self.skills = SkillLibrary.load(root / "skills")
+        self.store = Store(db_path or root / "data" / "router.db")
+        self._client = httpx.AsyncClient(timeout=self.registry.defaults.get("request_timeout_s", 120))
+        self.providers = providers or build_providers(self._client)
+        r = self.registry.routing
+        self.max_attempts = int(r.get("max_attempts", 3))
+        self.ctx_budget = int(r.get("context_budget_tokens", 24000))
+        self.cache_ttl = float(r.get("cache_ttl_s", 86400))
+        self.run_code = bool(r.get("run_generated_code", True))
+        quota.use(catalog.HOME / "ledger.json")
+        self.usage_listeners: list = []          # called with (spec, tokens_in, tokens_out, cost, top_cost, source)
+
+    def notify_usage(self, spec, tin: int, tout: int, source: str = "gateway") -> None:
+        """Tell the app about usage that didn't go through run() (e.g. the coding-tools gateway)."""
+        cost = spec.cost(tin, tout)
+        paid = [m for m in self.registry.usable() if m.provider != "offline" and not m.extra.get("free")]
+        top = max(paid, key=lambda m: (m.tier, m.price_out), default=None)
+        top_cost = top.cost(tin, tout) if top else cost
+        for fn in list(self.usage_listeners):
+            try:
+                fn(spec, tin, tout, cost, top_cost, source)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _allow_free(req: "RunRequest") -> bool:
+        if req.allow_free is not None:
+            return req.allow_free
+        from .catalog import get_settings
+        return get_settings().get("free_models", "chat") in ("chat", "all")
+
+    def reload(self) -> None:
+        """Rebuild the model list, e.g. after a new connection is added."""
+        self.registry = Registry(self._cfg_path, self._use_catalog)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    # ------------------------------------------------------------------ plan
+    def plan(self, req: RunRequest) -> tuple[TaskProfile, object, list, str, dict, float]:
+        """Everything decided locally before any model call. Timed for the <100ms target."""
+        t0 = time.perf_counter()
+        profile = classify(req.instruction, req.context, req.has_images)
+        decision = route(self.registry, self.store, profile, prefer=req.prefer,
+                         quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
+                         force_model=req.force_model, allow_free=self._allow_free(req),
+                         exclude=req.exclude, private=req.private)
+        skills = self.skills.select(req.instruction, profile)
+        ctx, ctx_info = fit_context(req.instruction, req.context, self.ctx_budget)
+        return profile, decision, skills, ctx, ctx_info, (time.perf_counter() - t0) * 1000
+
+    async def _maybe_llm_classify(self, req: RunRequest, profile: TaskProfile) -> TaskProfile:
+        thr = float(self.registry.routing.get("llm_classifier_below_confidence", 0.0))
+        if profile.confidence >= thr:
+            return profile
+        cheap = sorted((m for m in self.registry.usable() if m.provider != "offline"),
+                       key=lambda m: m.price_in + m.price_out)
+        if not cheap:
+            return profile
+        m = cheap[0]
+        sys_p = ("Classify the task. Reply with JSON only: {\"task_type\": one of "
+                 f"{list(TASK_TYPES)}, \"complexity\": 0..1}}")
+        try:
+            c = await self.providers[m.provider].complete(m, sys_p, req.instruction[:2000], 60, json_mode=True)
+            d = json.loads(c.text[c.text.find("{"): c.text.rfind("}") + 1])
+            if d.get("task_type") in TASK_TYPES:
+                profile.task_type = d["task_type"]
+                profile.complexity = float(d.get("complexity", profile.complexity))
+                profile.confidence = 0.9
+        except Exception:
+            pass
+        return profile
+
+    # ------------------------------------------------------------------- run
+    def refresh_free_quota(self) -> None:
+        """Check the free allowance in the background; never on the request's critical path."""
+        if time.time() - catalog.FREE.checked >= catalog.FREE.REFRESH_S:
+            try:
+                asyncio.get_running_loop().create_task(catalog.FREE.refresh(self._client))
+            except RuntimeError:
+                pass
+
+    def feedback(self, model_id: str, task_type: str, complexity: float, good: bool, source: str = "thumbs") -> None:
+        self.store.feedback(model_id=model_id, task_type=task_type, complexity=complexity, good=good, source=source)
+        if not good and model_id:
+            # Don't serve the same cached answer again.
+            self.store.cache_drop_model(model_id)
+
+    async def run(self, req: RunRequest, on_delta: Callable[[int, str], None] | None = None) -> RunResult:
+        """on_delta(attempt_number, text) streams the answer as it's written (attempt changes on escalation)."""
+        t_start = time.perf_counter()
+        rid = uuid.uuid4().hex[:12]
+        self.refresh_free_quota()
+        profile, decision, skills, ctx, ctx_info, routing_ms = self.plan(req)
+        if profile.confidence < float(self.registry.routing.get("llm_classifier_below_confidence", 0.0)):
+            profile = await self._maybe_llm_classify(req, profile)
+            decision = route(self.registry, self.store, profile, prefer=req.prefer,
+                             quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
+                             force_model=req.force_model, allow_free=self._allow_free(req),
+                         exclude=req.exclude, private=req.private)
+            skills = self.skills.select(req.instruction, profile)
+
+        result = RunResult(rid, "", None, False, profile.as_dict(), decision.as_dict(),
+                           [s.name for s in skills], ctx_info, routing_ms=routing_ms)
+        if req.dry_run:
+            result.total_ms = (time.perf_counter() - t_start) * 1000
+            return result
+
+        system = BASE_SYSTEM + (f"\n\n{req.system_extra}" if req.system_extra else "") + \
+            ("\n\n" + "\n\n".join(s.body for s in skills) if skills else "")
+        user = req.instruction if not ctx else f"{req.instruction}\n\n<context>\n{ctx}\n</context>"
+
+        key = Store.cache_key(req.instruction, ctx, req.tests or "", profile.task_type)
+        if req.use_cache and not req.force_model:
+            hit = self.store.cache_get(key, self.cache_ttl)
+            if hit:
+                result.output, result.model, result.passed, result.cached = hit["output"], hit["model"], True, True
+                result.total_ms = (time.perf_counter() - t_start) * 1000
+                return result
+
+        max_out = min(int(self.registry.defaults.get("max_output_tokens", 4096)),
+                      int(_OUT_BUDGET.get(profile.task_type, 1000) * (0.8 + 1.6 * profile.complexity)))
+        ladder = [decision.primary] + trim_ladder(decision.ladder, self.max_attempts - 1)
+        spent = 0.0
+        feedback = ""
+        best: tuple[float, str, str] | None = None   # (score, text, model)
+
+        for i, cand in enumerate(ladder):
+            m: ModelSpec = cand.model
+            if req.max_cost_usd is not None and spent + cand.est_cost > req.max_cost_usd and i > 0:
+                break
+            free = bool(m.extra.get("free"))
+            if free and not m.extra.get("quota") and not catalog.FREE.available() and m.id != req.force_model:
+                continue
+            if m.extra.get("quota") and m.id != req.force_model and \
+                    not quota.LEDGER.allow(m, profile.est_input_tokens + max_out // 2)[0]:
+                continue
+            prompt = user if not feedback else f"{user}\n\n{feedback}"
+            prov = self.providers[m.provider]
+            kw = dict(json_mode="json" in profile.needs, web="web" in profile.needs)
+            try:
+                if on_delta is not None:
+                    n = len(result.attempts) + 1
+                    comp = await prov.stream(m, system, prompt, max_out, lambda t, n=n: on_delta(n, t), **kw)
+                else:
+                    comp = await prov.complete(m, system, prompt, max_out, **kw)
+                self.registry.breaker.record(m.id, True)
+                quota.after_call(m, comp)
+                if free and not m.extra.get("quota"):
+                    catalog.FREE.note_used()
+            except (ProviderError, httpx.HTTPError) as e:
+                if quota.after_error(m, e):
+                    pass                                     # free-tier refusal: paused, move on
+                elif free and "429" in str(e):
+                    catalog.FREE.note_rate_limited(str(e))     # not the model's fault: don't trip the breaker
+                else:
+                    self.registry.breaker.record(m.id, False)
+                result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0, error=str(e)[:300]))
+                if i == len(ladder) - 1 and free:
+                    # The last option was a free model that refused: try once more without free models.
+                    retry = route(self.registry, self.store, profile, prefer=req.prefer,
+                                  quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
+                                  allow_free=False, exclude=req.exclude, private=req.private)
+                    if retry.primary.model.id not in {c.model.id for c in ladder}:
+                        ladder.append(retry.primary)
+                continue
+
+            cost = m.cost(comp.tokens_in, comp.tokens_out)
+            spent += cost
+            chk = ck.run_checks(profile, req.instruction, comp.text, comp.stop_reason, req.tests, self.run_code)
+            att = Attempt(m.id, chk.passed, chk.score, chk.reasons, comp.tokens_in, comp.tokens_out,
+                          cost, comp.latency_ms)
+            result.attempts.append(att)
+
+            if chk.passed and self._should_review(req, profile, m):
+                ok, issues, rev = await self._review(req, m, comp.text)
+                if rev:
+                    result.attempts.append(rev)
+                    spent += rev.cost_usd
+                if not ok:
+                    chk.passed = False
+                    chk.reasons = ["cross-review: " + x for x in issues] or ["cross-review rejected"]
+                    att.passed, att.reasons = False, chk.reasons
+
+            if m.provider != "offline":
+                self.store.record(request_id=rid, model_id=m.id, task_type=profile.task_type,
+                                  complexity=profile.complexity, passed=chk.passed, cost_usd=cost,
+                                  latency_ms=comp.latency_ms, tokens_in=comp.tokens_in,
+                                  tokens_out=comp.tokens_out, attempt=i + 1, reasons=chk.reasons)
+            if best is None or chk.score > best[0]:
+                best = (chk.score, comp.text, m.id)
+            if chk.passed:
+                result.output, result.model, result.passed = comp.text, m.id, True
+                if req.use_cache and m.provider != "offline":
+                    self.store.cache_put(key, {"output": comp.text, "model": m.id})
+                break
+            # Escalate: tell the next model exactly what failed; include the
+            # previous attempt only for code (it's usually close), capped.
+            if "cut off" in " ".join(chk.reasons):
+                max_out = min(max_out * 2, 16000)
+            prev = comp.text[:6000] if profile.task_type == "coding" else ""
+            feedback = ("A previous attempt failed these checks:\n- " + "\n- ".join(r[:800] for r in chk.reasons)
+                        + (f"\n\nPrevious attempt (fix it, don't start over unless needed):\n{prev}" if prev else ""))
+
+        if not result.passed and best:
+            result.output, result.model = best[1], best[2]
+        result.total_ms = (time.perf_counter() - t_start) * 1000
+        return result
+
+    # ---------------------------------------------------------------- review
+    def _should_review(self, req: RunRequest, profile: TaskProfile, m: ModelSpec) -> bool:
+        mode = req.cross_review or self.registry.routing.get("cross_review", "auto")
+        if mode == "off" or m.provider == "offline":
+            return False
+        if mode == "always":
+            return True
+        # auto: only for hard work that deterministic checks can't fully verify
+        verified_by_tests = profile.task_type == "coding" and ("code_exec" in profile.needs or req.tests)
+        return profile.complexity >= float(self.registry.routing.get("cross_review_complexity", 0.75)) \
+            and not verified_by_tests
+
+    async def _review(self, req: RunRequest, author: ModelSpec, text: str) -> tuple[bool, list[str], Attempt | None]:
+        pool = [m for m in self.registry.usable() if m.id != author.id and m.provider != "offline"]
+        if not pool:
+            return True, [], None
+        other = [m for m in pool if m.provider != author.provider] or pool
+        reviewer = min(other, key=lambda m: (m.price_in + m.price_out, -m.tier))
+        msg = f"TASK:\n{req.instruction[:4000]}\n\nRESPONSE:\n{text[:12000]}"
+        try:
+            c: Completion = await self.providers[reviewer.provider].complete(reviewer, ck.REVIEW_SYSTEM, msg, 300,
+                                                                             json_mode=True)
+        except (ProviderError, httpx.HTTPError) as e:
+            return True, [], Attempt(reviewer.id, True, 0, [], 0, 0, 0, 0, kind="review", error=str(e)[:200])
+        score, issues = ck.parse_review(c.text)
+        cost = reviewer.cost(c.tokens_in, c.tokens_out)
+        return score >= 7, issues, Attempt(reviewer.id, score >= 7, score / 10, issues, c.tokens_in,
+                                           c.tokens_out, cost, c.latency_ms, kind="review")
