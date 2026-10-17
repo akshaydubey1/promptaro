@@ -1,7 +1,7 @@
 {
   "$schema": "https://akshay-software-hub/schemas/manifest.v1.json",
   "id": "smart-router",
-  "name": "Smart Router",
+  "name": "Promptaro Smart Router",
   "description": "One instruction in, the right model out: picks the cheapest model that meets the quality bar, checks the result and escalates when needed. Also where AI accounts are connected. Start with ./run.sh router.",
   "icon": "zap",
   "color": "#2F8F83",

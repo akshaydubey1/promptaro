@@ -15,7 +15,8 @@ from pathlib import Path
 
 from .tools import _clean_env
 
-HOME = Path(os.environ.get("TILLWRIGHT_HOME", Path.home() / ".tillwright"))
+HOME = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("TILLWRIGHT_HOME")
+            or Path.home() / ".promptaro")
 
 
 # Never shown in reviews or committed, even in repos without a .gitignore.
@@ -78,9 +79,9 @@ async def _identity_args(cwd: Path) -> list[str]:
     email = (await git("config", "user.email", cwd=cwd, check=False)).strip()
     args = []
     if not name:
-        args += ["-c", "user.name=Tillwright"]
+        args += ["-c", "user.name=Promptaro"]
     if not email:
-        args += ["-c", "user.email=tillwright@localhost"]
+        args += ["-c", "user.email=promptaro@localhost"]
     return args
 
 

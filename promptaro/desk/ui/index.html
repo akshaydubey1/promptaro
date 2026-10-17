@@ -4,8 +4,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tillwright</title>
-<!-- Tillwright — Author: Akshay Dubey -->
+<title>Promptaro</title>
+<!-- Promptaro — Author: Akshay Dubey -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/static/app.css">
@@ -14,7 +14,7 @@
 <body>
 <div class="app" id="app">
   <aside class="side" id="side">
-    <div class="brand">Tillwright</div>
+    <div class="brand">Promptaro</div>
     <div class="side-actions">
       <button class="btn primary" id="newAgent" title="Give an agent a task in one of your projects">New agent task</button>
       <button class="btn" id="newChat">New chat</button>
@@ -31,12 +31,12 @@
   <main class="main">
     <header class="top" id="top">
       <button class="btn ghost icon only-mobile" id="menu" aria-label="Show conversations">☰</button>
-      <h1 id="title">Tillwright</h1>
+      <h1 id="title">Promptaro</h1>
       <div class="top-tools" id="topTools"></div>
     </header>
 
     <div class="update-bar hidden" id="updateBar" role="status">
-      <span>Tillwright has been updated. Restart to use the new version.</span>
+      <span>Promptaro has been updated. Restart to use the new version.</span>
       <button class="btn primary" id="restartBtn">Restart now</button>
     </div>
     <section class="thread" id="thread" aria-live="polite"></section>
@@ -115,11 +115,11 @@
   <div class="dlg wide">
     <h2>Connections</h2>
     <p class="fine" id="connStorage"></p>
-    <label for="anyKey">Paste any API key (OpenRouter, Anthropic, OpenAI or Google). Tillwright works out which one it is.</label>
+    <label for="anyKey">Paste any API key (OpenRouter, Anthropic, OpenAI or Google). Promptaro works out which one it is.</label>
     <div class="row"><input id="anyKey" type="password" autocomplete="off" placeholder="sk-or-…, sk-ant-…, sk-…, AIza…"><button class="btn primary" id="anyKeyBtn">Connect</button></div>
     <div class="conn-msg hidden" id="connMsg" role="status"></div>
     <div id="connBody"></div>
-    <div class="row end"><button class="btn ghost" id="quitBtn" title="Stop Tillwright running in the background">Quit Tillwright</button><span class="grow"></span><button class="btn" id="connClose">Done</button></div>
+    <div class="row end"><button class="btn ghost" id="quitBtn" title="Stop Promptaro running in the background">Quit Promptaro</button><span class="grow"></span><button class="btn" id="connClose">Done</button></div>
   </div>
 </dialog>
 
@@ -128,7 +128,7 @@
   <div class="dlg wide">
     <h2>Coding tools</h2>
     <p class="fine">Run Claude Code, Aider, Cline, Continue or OpenCode on the models connected here. Your tool talks to
-      Tillwright on this computer, and Tillwright picks a model for each request: quick housekeeping goes to the fastest
+      Promptaro on this computer, and Promptaro picks a model for each request: quick housekeeping goes to the fastest
       free model, real coding to the strongest free model that fits, and a model that hits its limit is swapped out at once.</p>
     <div id="toolsBody"></div>
     <div class="row end"><button class="btn" id="toolsClose">Done</button></div>

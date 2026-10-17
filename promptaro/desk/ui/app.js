@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-// Tillwright — Author: Akshay Dubey
+// Promptaro — Author: Akshay Dubey
 "use strict";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -8,7 +8,7 @@ const S = { sessions: [], current: null, session: null, models: [], tiers: {}, r
 async function api(path, opts = {}) {
   const r = await fetch(path, {
     ...opts,
-    headers: { "content-type": "application/json", "x-tillwright": "1", ...(opts.headers || {}) },
+    headers: { "content-type": "application/json", "x-promptaro": "1", ...(opts.headers || {}) },
     body: opts.body && typeof opts.body !== "string" ? JSON.stringify(opts.body) : opts.body,
   });
   const text = await r.text();
@@ -127,15 +127,15 @@ async function onboarding() {
     : x.installed ? `${tool} is installed but not signed in with your ${name} plan. In Terminal run <code>${how}</code>.`
     : `Install ${tool} and sign in with your ${name} plan.`;
   $("thread").innerHTML = `<div class="welcome onboard">
-    <h2>Welcome to Tillwright</h2>
-    <p>One place for every AI model. Tillwright picks the right model for each question, so easy things cost nothing and hard things get the best. Setup takes about a minute.</p>
+    <h2>Welcome to Promptaro</h2>
+    <p>One place for every AI model. Promptaro picks the right model for each question, so easy things cost nothing and hard things get the best. Setup takes about a minute.</p>
     <ol class="steps">
       <li class="${or ? "done" : ""}"><div><b>Sign in with OpenRouter</b><span>A free account that unlocks every model family, including 50 free requests a day.</span></div>
         ${or ? '<span class="ok">✓ Connected</span>' : '<a class="btn primary" href="/connect/openrouter/start">Sign in</a>'}</li>
       <li class="${freeCount ? "done" : ""}"><div><b>Add free providers</b><span>Groq, Cerebras and NVIDIA give free keys with generous daily allowances and don't train on your prompts. Each takes a minute; together they cover millions of tokens a day.</span>${freeCount ? `<span class="ok">✓ ${freeCount} connected</span>` : ""}</div>
         <button class="btn" data-start="connect">${freeCount ? "Add more" : "Add free keys"}</button></li>
       <li class="${subs.claude_code?.subscription || subs.codex?.subscription ? "done" : ""}"><div><b>Already pay for Claude or ChatGPT?</b>
-        <span>Hard agent tasks run on your plan, with no extra cost. Tillwright finds them on its own.</span>
+        <span>Hard agent tasks run on your plan, with no extra cost. Promptaro finds them on its own.</span>
         <span class="plan">Claude: ${plan(subs.claude_code || {}, "Claude", "Claude Code", "claude")}</span>
         <span class="plan">ChatGPT: ${plan(subs.codex || {}, "ChatGPT", "Codex CLI", "codex login")}</span></div>
         <button class="btn" data-start="recheck">Check again</button></li>
@@ -188,7 +188,7 @@ async function openSavings() {
     ${S.freeUsage && S.freeUsage.length ? `<h3>Free providers today</h3><table class="opts-table"><thead><tr><th>Provider</th><th>Requests</th><th>Tokens</th><th>Status</th></tr></thead><tbody>${
       S.freeUsage.map((u) => `<tr><td>${esc(u.label)}</td><td>${k(u.requests_today)}${u.requests_left_today ? ` <span class="fine">(${k(u.requests_left_today)} left)</span>` : ""}</td><td>${k(u.tokens_today)}${u.tokens_left_today ? ` <span class="fine">(${k(u.tokens_left_today)} left)</span>` : ""}</td><td>${u.paused ? (u.paused === "daily" ? "Done for today" : "Cooling down") : "Available"}</td></tr>`).join("")}</tbody></table>` : ""}
     ${t.gateway_requests ? `<p>Coding tools: ${plural(t.gateway_requests, "request")}, ${t.gateway_free || 0} on free models.</p>` : ""}
-    <h3>What Tillwright has learned</h3>
+    <h3>What Promptaro has learned</h3>
     ${d.learned && d.learned.length ? `<table class="opts-table"><thead><tr><th>Model</th><th>Uses</th><th>Passed checks</th><th>👍 / 👎</th></tr></thead><tbody>${
       d.learned.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.runs}</td><td>${x.pass_rate == null ? "—" : pct(x.pass_rate)}</td><td>${x.thumbs_up} / ${x.thumbs_down}</td></tr>`).join("")}</tbody></table>`
       : '<p class="note">Nothing yet. Every answer, check and thumbs up or down makes the next choice better.</p>'}`;
@@ -347,7 +347,7 @@ $("topTools").addEventListener("click", async (e) => {
     const s = S.session;
     if (!confirm(s.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
     await api(`/api/sessions/${s.id}`, { method: "DELETE" });
-    S.current = null; S.session = null; $("title").textContent = "Tillwright"; renderTop(); closeReview(); welcome(); loadSessions();
+    S.current = null; S.session = null; $("title").textContent = "Promptaro"; renderTop(); closeReview(); welcome(); loadSessions();
   }
 });
 function updateComposer() { $("stopBtn").classList.toggle("hidden", !(S.session?.kind === "agent" && S.running)); }
@@ -585,10 +585,10 @@ $("connBody").addEventListener("click", async (e) => {
 
 $("quitBtn").onclick = async () => {
   const running = S.sessions.filter((s) => s.status === "running" || s.status === "waiting").length;
-  if (!confirm(running ? `${running} agent task(s) are running and will be stopped. Quit Tillwright?` : "Quit Tillwright? Open it again any time from your apps.")) return;
+  if (!confirm(running ? `${running} agent task(s) are running and will be stopped. Quit Promptaro?` : "Quit Promptaro? Open it again any time from your apps.")) return;
   try { await api("/api/quit", { method: "POST" }); } catch {}
   $("connDlg").close();
-  document.body.innerHTML = '<div class="welcome" style="max-width:520px;margin:20vh auto;padding:0 16px"><h2>Tillwright has stopped.</h2><p>Open it again from Applications, the Start menu or your app menu. You can close this window.</p></div>';
+  document.body.innerHTML = '<div class="welcome" style="max-width:520px;margin:20vh auto;padding:0 16px"><h2>Promptaro has stopped.</h2><p>Open it again from Applications, the Start menu or your app menu. You can close this window.</p></div>';
 };
 
 /* ---------------- free providers ---------------- */
@@ -606,7 +606,7 @@ const privacyBadge = (p) => p.trains ? '<span class="badge trains" title="Its fr
   : '<span class="badge private" title="Its free tier does not use your prompts for training">Doesn\'t train on prompts</span>';
 function freeRows(d) {
   const used = Object.fromEntries((d.usage || []).map((u) => [u.id, u]));
-  return `<div class="free-head"><h3>Free providers</h3><span class="fine">One free key each. Tillwright tracks every limit and moves on when one runs out.</span></div>` +
+  return `<div class="free-head"><h3>Free providers</h3><span class="fine">One free key each. Promptaro tracks every limit and moves on when one runs out.</span></div>` +
     d.providers.map((p) => {
       const u = used[p.id];
       const today = u ? `<br><span class="sub">Today: ${k(u.requests_today)} requests · ${k(u.tokens_today)} tokens${u.paused ? ` · <b>${u.paused === "daily" ? "daily limit reached" : "rate-limited, back in a minute"}</b>` : ""}</span>` : "";
@@ -626,13 +626,13 @@ async function openTools() {
   $("toolsBody").innerHTML = `
     <div class="tool-card">
       <h3>1. Add the launchers <span class="fine">(once)</span></h3>
-      ${L.installed ? `<span class="ok">✓ Installed in ${esc(L.dir)}</span>` : `<div><button class="btn primary" id="installLaunchers">Add tw-claude, tw-aider and tw-env</button></div>`}
+      ${L.installed ? `<span class="ok">✓ Installed in ${esc(L.dir)}</span>` : `<div><button class="btn primary" id="installLaunchers">Add promptaro-claude, promptaro-aider and promptaro-env</button></div>`}
       ${L.installed && !L.on_path ? `<div class="warn-note">${esc(L.dir)} isn't on your PATH yet. ${win ? "Add it in System Properties → Environment Variables." : `Run <code>echo 'export PATH="$HOME/.local/bin:$PATH"' &gt;&gt; ~/.zshrc</code> and open a new Terminal.`}</div>` : ""}
     </div>
     <div class="tool-card">
-      <h3>2. Start your tool through Tillwright</h3>
-      <div class="kv"><span>Claude Code</span>${cmd("tw-claude")}<span>Aider</span>${cmd("tw-aider")}${win ? "" : `<span>Any other tool</span>${cmd('eval "$(tw-env)"')}`}</div>
-      ${g.claude_installed ? "" : '<p class="fine">Claude Code isn\'t installed yet: <a href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank" rel="noopener">install it</a>. When started with tw-claude it uses Tillwright\'s models, not your Claude subscription.</p>'}
+      <h3>2. Start your tool through Promptaro</h3>
+      <div class="kv"><span>Claude Code</span>${cmd("promptaro-claude")}<span>Aider</span>${cmd("promptaro-aider")}${win ? "" : `<span>Any other tool</span>${cmd('eval "$(promptaro-env)"')}`}</div>
+      ${g.claude_installed ? "" : '<p class="fine">Claude Code isn\'t installed yet: <a href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank" rel="noopener">install it</a>. When started with promptaro-claude it uses Promptaro\'s models, not your Claude subscription.</p>'}
     </div>
     <div class="tool-card">
       <h3>Or set it up by hand</h3>
@@ -656,7 +656,7 @@ async function openTools() {
       <h3>Recent requests</h3>
       ${g.recent.length ? `<table class="opts-table"><thead><tr><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${
         g.recent.map((r) => `<tr><td>${esc(r.name)} ${r.free ? '<span class="tag free">Free</span>' : ""}</td><td>${fmtTokens(r.tokens_in + r.tokens_out)}</td><td>${r.free ? "$0" : money(r.cost)}</td></tr>`).join("")}</tbody></table>`
-        : '<p class="note">None yet. Start a tool with tw-claude and its requests show up here.</p>'}
+        : '<p class="note">None yet. Start a tool with promptaro-claude and its requests show up here.</p>'}
     </div>`;
   const inst = $("installLaunchers");
   if (inst) inst.onclick = async () => { inst.disabled = true; try { await api("/api/gateway/launchers", { method: "POST" }); openTools(); } catch (e) { toast(e.message); inst.disabled = false; } };
@@ -664,7 +664,7 @@ async function openTools() {
   const getTok = async () => tok || (tok = (await api("/api/gateway/token", { method: "POST" })).token);
   $("tokShow").onclick = async () => { $("tokVal").textContent = await getTok(); };
   $("tokCopy").onclick = async () => { navigator.clipboard.writeText(await getTok()); toast("Token copied"); };
-  $("tokRotate").onclick = async () => { if (!confirm("Make a new token? Tools set up by hand will need the new one; tw-claude and friends pick it up automatically.")) return; await api("/api/gateway/rotate", { method: "POST" }); tok = null; toast("New token made"); openTools(); };
+  $("tokRotate").onclick = async () => { if (!confirm("Make a new token? Tools set up by hand will need the new one; promptaro-claude and friends pick it up automatically.")) return; await api("/api/gateway/rotate", { method: "POST" }); tok = null; toast("New token made"); openTools(); };
   $("gwSpend").onchange = async (e) => { try { await api("/connect/settings", { method: "POST", body: { gateway_spend: e.target.value } }); toast("Saved"); } catch (err) { toast(err.message); } };
   if (!$("toolsDlg").open) $("toolsDlg").showModal();
 }
@@ -694,7 +694,7 @@ $("restartBtn").onclick = async () => {
     try { const h = await (await fetch("/healthz", { cache: "no-store" })).json(); if (h.build !== old) return location.reload(); } catch {}
   }
   $("restartBtn").disabled = false; $("restartBtn").textContent = "Restart now";
-  toast("Couldn't restart automatically. Close the Terminal window and open Tillwright again.", 8000);
+  toast("Couldn't restart automatically. Close the Terminal window and open Promptaro again.", 8000);
 };
 setInterval(checkUpdate, 30000);
 

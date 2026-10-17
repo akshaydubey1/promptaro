@@ -2,13 +2,16 @@
 """Shared fixtures: isolated secret store + a fixed model list (no network)."""
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
 import pytest
 import yaml
 
-from router import catalog, secrets
+os.environ.setdefault("PROMPTARO_NO_MIGRATE", "1")   # never move real ~/.akshay-router in tests
+
+from router import catalog, secrets  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 

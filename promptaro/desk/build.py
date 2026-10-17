@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-"""Fingerprint of the code on disk, so a running Tillwright can tell it has been updated.
+"""Fingerprint of the code on disk, so a running Promptaro can tell it has been updated.
 
 Author: Akshay Dubey
 """

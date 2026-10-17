@@ -1,8 +1,8 @@
 {
   "$schema": "https://akshay-software-hub/schemas/manifest.v1.json",
-  "id": "tillwright",
-  "name": "Tillwright",
-  "description": "Chat with every AI model and run coding agents on your repos. The Smart Router picks the right model for each step: free models for easy questions, the cheapest capable model for everyday work, and your Claude or ChatGPT subscription for hard tasks. Every answer explains its choice. Install the app with services/tillwright/Install Tillwright.command (Mac), Install Tillwright.bat (Windows) or packaging/install-linux.sh, or run ./run.sh desk.",
+  "id": "promptaro",
+  "name": "Promptaro",
+  "description": "Chat with every AI model and run coding agents on your repos. The Smart Router picks the right model for each step: free models for easy questions, the cheapest capable model for everyday work, and your Claude or ChatGPT subscription for hard tasks. Every answer explains its choice. Install the app with promptaro/Install Promptaro.command (Mac), Install Promptaro.bat (Windows) or packaging/install-linux.sh, or run ./run.sh desk.",
   "icon": "bot",
   "color": "#3B6FD8",
   "category": "AI Agents",
