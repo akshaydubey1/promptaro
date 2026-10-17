@@ -64,6 +64,11 @@ async function loadModels() {
   const on = S.models.length > 0;
   $("connDot").classList.toggle("on", on);
   $("connLabel").textContent = on ? `${S.models.length} models connected` : "Connect AI accounts";
+  inputHint();
+}
+/* The composer never invites input it can't serve. */
+function inputHint() {
+  $("input").placeholder = S.models.length ? "Ask anything" : "Connect an AI account to start chatting";
 }
 const fmtTokens = (n) => (n >= 10000 ? (n / 1000).toFixed(1) + "k" : String(n));
 const money = (v) => (!v ? "$0" : v < 0.01 ? "$" + v.toFixed(4) : "$" + v.toFixed(2));
@@ -133,7 +138,7 @@ async function onboarding() {
       <li class="${or ? "done" : ""}"><div><b>Sign in with OpenRouter</b><span>A free account that unlocks every model family, including 50 free requests a day.</span></div>
         ${or ? '<span class="ok">✓ Connected</span>' : '<a class="btn primary" href="/connect/openrouter/start">Sign in</a>'}</li>
       <li class="${freeCount ? "done" : ""}"><div><b>Add free providers</b><span>Groq, Cerebras and NVIDIA give free keys with generous daily allowances and don't train on your prompts. Each takes a minute; together they cover millions of tokens a day.</span>${freeCount ? `<span class="ok">✓ ${freeCount} connected</span>` : ""}</div>
-        <button class="btn" data-start="connect">${freeCount ? "Add more" : "Add free keys"}</button></li>
+        <button class="btn" data-start="free">${freeCount ? "Add more" : "Add free keys"}</button></li>
       <li class="${subs.claude_code?.subscription || subs.codex?.subscription ? "done" : ""}"><div><b>Already pay for Claude or ChatGPT?</b>
         <span>Hard agent tasks run on your plan, with no extra cost. Promptaro finds them on its own.</span>
         <span class="plan">Claude: ${plan(subs.claude_code || {}, "Claude", "Claude Code", "claude")}</span>
@@ -152,6 +157,7 @@ $("thread").addEventListener("click", async (e) => {
   if (st.dataset.start === "agent") openAgentDialog();
   if (st.dataset.start === "chat") $("input").focus();
   if (st.dataset.start === "connect") openConnections();
+  if (st.dataset.start === "free") openConnections().then(() => $("freeHead")?.scrollIntoView({ block: "start" }));
   if (st.dataset.start === "recheck") { st.textContent = "Checking…"; await api("/api/subscriptions?refresh=1"); await loadModels(); welcome(); }
 });
 
@@ -359,6 +365,11 @@ input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey 
 $("sendBtn").onclick = send;
 async function send() {
   const text = input.value.trim(); if (!text) return;
+  if (!S.models.length) {          // nothing connected — guide to the one-minute setup instead of dead-ending
+    toast("Connect one AI account first — sign in with OpenRouter or paste any key.", 5000);
+    connMsg(); openConnections().then(() => $("anyKey").focus());
+    return;
+  }
   try {
     if (!S.current) {
       const s = await api("/api/sessions", { method: "POST", body: { prefer: $("preferPick").value, model: $("modelPick").value } });
@@ -372,7 +383,7 @@ async function send() {
 $("stopBtn").onclick = () => S.current && api(`/api/sessions/${S.current}/stop`, { method: "POST" });
 $("modelPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { model: $("modelPick").value } });
 $("preferPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { prefer: $("preferPick").value } });
-$("newChat").onclick = () => { S.current = null; S.session = null; $("title").textContent = "New chat"; $("input").placeholder = "Ask anything"; renderSide(); renderTop(); closeReview(); welcome(); input.focus(); $("side").classList.remove("open"); };
+$("newChat").onclick = () => { S.current = null; S.session = null; $("title").textContent = "New chat"; inputHint(); renderSide(); renderTop(); closeReview(); welcome(); input.focus(); $("side").classList.remove("open"); };
 
 /* ---------------- live events ---------------- */
 let streamKey = "";
@@ -527,6 +538,7 @@ async function openConnections() {
     catch (err) { toast(err.message); }
   };
   if (!$("connDlg").open) $("connDlg").showModal();
+  if (!S.models.length) $("anyKey").focus();          // first visit: one click, one paste, done
 }
 function connMsg(kind, text, small) {
   const m = $("connMsg");
@@ -606,7 +618,7 @@ const privacyBadge = (p) => p.trains ? '<span class="badge trains" title="Its fr
   : '<span class="badge private" title="Its free tier does not use your prompts for training">Doesn\'t train on prompts</span>';
 function freeRows(d) {
   const used = Object.fromEntries((d.usage || []).map((u) => [u.id, u]));
-  return `<div class="free-head"><h3>Free providers</h3><span class="fine">One free key each. Promptaro tracks every limit and moves on when one runs out.</span></div>` +
+  return `<div class="free-head" id="freeHead"><h3>Free providers</h3><span class="fine">One free key each. Promptaro tracks every limit and moves on when one runs out.</span></div>` +
     d.providers.map((p) => {
       const u = used[p.id];
       const today = u ? `<br><span class="sub">Today: ${k(u.requests_today)} requests · ${k(u.tokens_today)} tokens${u.paused ? ` · <b>${u.paused === "daily" ? "daily limit reached" : "rate-limited, back in a minute"}</b>` : ""}</span>` : "";
@@ -675,6 +687,20 @@ document.addEventListener("click", (e) => {
   if (b) { navigator.clipboard.writeText(b.dataset.copytext); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); }
 });
 
+/* ---------------- answer details toggle ---------------- */
+/* Shows/hides the "model · Paid/Free · tokens · cost" line under each answer.
+   On by default; the choice persists across launches. */
+function applyDetailsPref() {
+  const on = localStorage.getItem("promptaro:modelInfo") !== "off";
+  $("app").classList.toggle("no-route-info", !on);
+  $("detailsDot").classList.toggle("on", on);
+  $("detailsBtn").classList.toggle("off", !on);
+}
+$("detailsBtn").onclick = () => {
+  localStorage.setItem("promptaro:modelInfo", localStorage.getItem("promptaro:modelInfo") === "off" ? "on" : "off");
+  applyDetailsPref();
+};
+
 /* ---------------- updates ---------------- */
 async function checkUpdate() {
   try {
@@ -704,5 +730,6 @@ setInterval(checkUpdate, 30000);
   if (q.get("connected")) toast("Signed in. Models are ready.");
   if (q.get("error")) toast(q.get("error"), 6000);
   if (q.toString()) history.replaceState(null, "", "/");
+  applyDetailsPref();
   await loadModels(); await loadSessions(); welcome(); connectStream(); checkUpdate(); loadSavings();
 })();
