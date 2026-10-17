@@ -135,3 +135,21 @@ def test_keychain_present_but_empty_falls_through_to_file(tmp_path, monkeypatch)
     monkeypatch.setattr(secrets, "_FALLBACK", f)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert secrets.get("ANTHROPIC_API_KEY") == "sk-file"
+
+def test_migrated_worktrees_get_git_back_pointer_repaired(legacy, tmp_path):
+    """A worktree that moved with the home dir must have its gitdir back-pointer repointed —
+    otherwise git treats it as deleted and `worktree prune` can drop unmerged work."""
+    tw, ak, new = legacy
+    repo = tmp_path / "repo"
+    gdir = repo / ".git" / "worktrees" / "proj-wt"
+    gdir.mkdir(parents=True)
+    old_wt = tw / "worktrees" / "proj-wt"
+    old_wt.mkdir(parents=True)
+    (old_wt / ".git").write_text(f"gitdir: {gdir}\n")          # worktree → repo (unchanged by move)
+    (gdir / "gitdir").write_text(f"{old_wt}/.git\n")          # repo → old worktree path (goes stale)
+
+    migrate.migrate(new)
+
+    moved = new / "worktrees" / "proj-wt"
+    assert moved.is_dir()
+    assert (gdir / "gitdir").read_text().strip() == str(moved / ".git")

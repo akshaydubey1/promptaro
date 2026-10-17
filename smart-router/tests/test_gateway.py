@@ -379,38 +379,3 @@ def test_busy_models_ask_client_to_retry(gw, monkeypatch):
     r = gw.post("/v1/messages", headers={"x-api-key": gw.token},
                 json={"model": "claude-sonnet-4-5", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 529
-
-
-def test_copilot_plan_lane_serves_the_gateway(tmp_path, monkeypatch):
-    """Signed-in Copilot plan: gateway exchanges for a service token and calls the plan endpoint."""
-    _free_stack()
-    secrets.set("GITHUB_COPILOT_TOKEN", "gho_test")
-    catalog._write_cache("free_github_copilot.json", ["gpt-4o", "claude-sonnet-4"])
-    seen = []
-
-    def upstream(req):
-        if req.url.host == "api.github.com":
-            return httpx.Response(200, json={"token": "svc_tok", "expires_at": time.time() + 1500,
-                                             "endpoints": {"api": "https://api.individual.githubcopilot.com"}})
-        seen.append((req.url.host, req.headers.get("authorization"), json.loads(req.content).get("model")))
-        return httpx.Response(200, json={"choices": [{"message": {"content": "hi from copilot"},
-                                                      "finish_reason": "stop"}],
-                                         "usage": {"prompt_tokens": 5, "completion_tokens": 2}})
-    monkeypatch.setattr(gateway, "_client", httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
-    app = FastAPI()
-    app.state.router = Router(_root(tmp_path), db_path=tmp_path / "r.db")
-    app.include_router(gateway.api)
-    c = TestClient(app)
-    assert "github_copilot/gpt-4o" in app.state.router.registry.models          # included: plan present
-    r = c.post("/v1/chat/completions", headers={"authorization": f"Bearer {gateway.gateway_token()}"},
-               json={"model": "github_copilot/gpt-4o", "messages": [{"role": "user", "content": "hi"}]})
-    assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "hi from copilot"
-    assert seen == [("api.individual.githubcopilot.com", "Bearer svc_tok", "gpt-4o")]  # service token, plan endpoint
-
-
-def test_no_copilot_lane_without_sign_in(tmp_path, monkeypatch):
-    """Not signed in: no Copilot models exist in the catalog — routing bypasses the lane entirely."""
-    _free_stack()
-    app = FastAPI()
-    app.state.router = Router(_root(tmp_path), db_path=tmp_path / "r.db")
-    assert not any(m.startswith("github_copilot/") for m in app.state.router.registry.models)

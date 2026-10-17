@@ -29,7 +29,7 @@ working alongside the new `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to o
 
 ```bash
 cd smart-router && python -m pytest -q     # 101 tests
-cd promptaro && python -m pytest -q        # 74 tests
+cd promptaro && python -m pytest -q        # 75 tests
 ```
 
 ---

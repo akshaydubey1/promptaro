@@ -37,11 +37,8 @@ def isolated_secrets(tmp_path, monkeypatch):
     monkeypatch.setattr(secrets, "_kr_ok", False)
     monkeypatch.setattr(secrets, "_FALLBACK", home / "credentials.json")
     monkeypatch.setattr(catalog, "HOME", home)
-    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
-              "GITHUB_COPILOT_TOKEN", "GITHUB_TOKEN"):
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(k, raising=False)
-    from router import copilot
-    copilot._reset()                                                # fresh device/service-token state
     monkeypatch.setattr(catalog, "ollama_models", lambda client=None: [])
     monkeypatch.setattr(catalog, "FREE", catalog.FreeQuota())       # fresh free allowance per test
 

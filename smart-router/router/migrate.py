@@ -8,7 +8,8 @@ worktrees, logs). Both move to ``~/.promptaro``. The migration:
   * moves every entry of each legacy dir into the new home (same-filesystem
     renames — fast even for large worktrees), skipping anything already there;
   * rewrites ``worktree`` paths inside desk.db so existing agent sessions keep
-    pointing at their copies;
+    pointing at their copies, and repoints git's back-pointer for each moved
+    worktree (the worktree's own records would otherwise call it deleted);
   * leaves non-empty leftovers alone and never fails startup.
 
 It runs once per process, on the first touch of the home directory.
@@ -83,6 +84,7 @@ def migrate(new: Path) -> None:
                 continue
         if moved_db:
             _rewrite_worktree_paths(moved_db, new)
+        _repair_moved_worktrees(new)
         try:
             (new / ".migrated").touch()
         except OSError:
@@ -101,3 +103,31 @@ def _rewrite_worktree_paths(db: Path, new: Path) -> None:
         con.close()
     except sqlite3.Error:
         pass
+
+
+def _repair_moved_worktrees(new: Path) -> None:
+    """Repoint git's back-pointer for each worktree that moved with the home dir.
+
+    A worktree's ``.git`` file points into ``<repo>/.git/worktrees/<id>`` (still
+    valid — the repo didn't move), but that admin dir's ``gitdir`` file still
+    names the worktree's old path. Left stale, git treats the worktree as gone
+    and a later ``worktree prune`` can delete its unmerged work. Rewriting the
+    file is what ``git worktree repair`` does — without needing git installed.
+    """
+    wts = new / "worktrees"
+    if not wts.is_dir():
+        return
+    for wt in wts.iterdir():
+        try:
+            dotgit = wt / ".git"
+            if not dotgit.is_file():
+                continue
+            text = dotgit.read_text().strip()
+            if not text.startswith("gitdir:"):
+                continue
+            back = Path(text.split(":", 1)[1].strip()) / "gitdir"
+            want = str(dotgit)
+            if back.parent.is_dir() and (not back.exists() or back.read_text().strip() != want):
+                back.write_text(want + "\n")
+        except OSError:
+            continue

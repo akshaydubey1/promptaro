@@ -153,6 +153,14 @@ def _clean_env() -> dict:
            if not _NAME_DROP.search(k) and not _URL_CRED.search(v)}
     env.update({"CI": "1", "GIT_TERMINAL_PROMPT": "0", "PAGER": "cat", "GIT_PAGER": "cat", "NO_COLOR": "1",
                 "PYTHONDONTWRITEBYTECODE": "1"})
+    # The GIT_CONFIG_* family (CI/Codespaces set COUNT+KEY_n+VALUE_n triples) partially matches the
+    # name filter — a surviving GIT_CONFIG_COUNT makes every git call die with "missing config key".
+    # Repo-scoping vars are dropped too: they would point our git calls (and agent commands) at the
+    # wrong repository. User config still comes through HOME.
+    env = {k: v for k, v in env.items() if not k.startswith("GIT_CONFIG_")}
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+              "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+        env.pop(k, None)
     return env
 
 

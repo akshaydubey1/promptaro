@@ -20,7 +20,7 @@ from pathlib import Path
 
 import httpx
 
-from . import copilot, migrate, secrets
+from . import migrate, secrets
 from .free_providers import FAMILY_TRUST, FREE_PROVIDERS, limits_for, pick_models
 
 HOME = migrate.home()                        # ~/.promptaro, migrating ~/.akshay-router & ~/.tillwright
@@ -157,12 +157,6 @@ def _native_id(vendor: str, or_id: str) -> str | None:
 def discover_free(pid: str, client: httpx.Client | None = None) -> list[str]:
     """List a free provider's models with the user's key. Also validates the key."""
     p = FREE_PROVIDERS[pid]
-    if p.plan and pid == "github_copilot":
-        if not copilot.connected():
-            return []
-        ids = copilot.list_models(client)
-        _write_cache(f"free_{pid}.json", ids)
-        return ids
     key = secrets.get(p.key_env)
     if not key:
         return []
@@ -195,10 +189,9 @@ def free_provider_specs() -> list[dict]:
             trust = FAMILY_TRUST.get(rule.family, -0.08)
             specs.append({
                 "id": f"{pid}/{model}", "name": f"{model.split('/')[-1]} ({p.label})",
-                "provider": "github_copilot" if p.plan else "openai_compatible",
-                "model": model, "api_key_env": p.key_env,
-                "base_url": copilot._api_base() if p.plan else p.base_url,
-                "via": f"{p.label} (plan)" if p.plan else f"{p.label} (free)", "plan": p.plan,
+                "provider": "openai_compatible",
+                "model": model, "api_key_env": p.key_env, "base_url": p.base_url,
+                "via": f"{p.label} (free)",
                 "free": True, "trains": p.trains, "quota": pid, "limits": limits_for(p, rule), "vendor": pid,
                 "tier": rule.tier, "context_window": rule.context, "capabilities": sorted(caps),
                 "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": p.latency_ms,

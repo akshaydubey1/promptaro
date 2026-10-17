@@ -51,7 +51,6 @@ class FreeProvider:
     checked: str = "2026-10-15"
     source: str = ""
     max_models: int = 4
-    plan: bool = False              # True = the person's own subscription/plan, not a free API tier
 
 
 FREE_PROVIDERS: dict[str, FreeProvider] = {p.id: p for p in (
@@ -133,26 +132,6 @@ FREE_PROVIDERS: dict[str, FreeProvider] = {p.id: p for p in (
         note="Trial key: 1000 requests a month, non-commercial use only.",
         source="https://docs.cohere.com/docs/rate-limits"),
     FreeProvider(
-        id="github_copilot", label="GitHub Copilot", base_url="https://api.githubcopilot.com",
-        key_env="GITHUB_COPILOT_TOKEN", get_key_url="https://github.com/settings/copilot",
-        key_pattern=r"^(gho_|ghu_|ghr_)[A-Za-z0-9]{20,}$",   # OAuth tokens can also mint service tokens
-        limits={"rpm": 20}, scope="account", trains=False, latency_ms=1800, plan=True,
-        rules=(
-            ModelRule(r"^claude-opus", 3, "claude", 200_000),
-            ModelRule(r"^claude-sonnet", 2, "claude", 200_000),
-            ModelRule(r"^claude-haiku", 1, "claude", 200_000),
-            ModelRule(r"^gpt-5", 2, "openai", 200_000),
-            ModelRule(r"^gpt-4\.1$|^gpt-4o$|^codex|^o[134]", 2, "openai", 200_000),
-            ModelRule(r"^gpt-4\.1-mini|^gpt-4\.1-nano|^gpt-4o-mini|^o[134]-mini", 1, "openai", 200_000),
-            ModelRule(r"^gemini-.*pro", 3, "gemini", 200_000),
-            ModelRule(r"^gemini-.*flash", 1, "gemini", 200_000),
-            ModelRule(r"^grok", 2, "grok", 200_000),
-        ),
-        fallback_models=(),
-        note="Uses your own Copilot plan — sign in once, no metered billing. Premium models may count "
-             "against your plan's monthly premium-request allowance.",
-        source="https://docs.github.com/en/copilot", max_models=6),
-    FreeProvider(
         id="gemini_free", label="Gemini (free tier)", base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         key_env="GEMINI_API_KEY", get_key_url="https://aistudio.google.com/app/apikey",
         key_pattern=r"^AIza[A-Za-z0-9_\-]{20,}$",
@@ -166,20 +145,6 @@ FREE_PROVIDERS: dict[str, FreeProvider] = {p.id: p for p in (
         note="AI Studio's free tier. Free-tier prompts may be used to improve Google products, so "
              "private code uses this only when 'all' free models are allowed.",
         source="https://ai.google.dev/gemini-api/docs/rate-limits"),
-    FreeProvider(
-        id="github_models", label="GitHub Models", base_url="https://models.github.ai/inference",
-        key_env="GITHUB_TOKEN", get_key_url="https://github.com/settings/personal-access-tokens",
-        key_pattern=r"^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$",
-        limits={"rpm": 15, "rpd": 150, "tpm": 20_000}, scope="model", trains=False, latency_ms=2000,
-        rules=(
-            ModelRule(r"gpt-4o$|gpt-4\.1$|Llama-3\.3-70B|DeepSeek-V3|DeepSeek-R1", 2, "meta", 131_072,
-                      limits={"rpd": 50, "tpm": 8_000}),
-            ModelRule(r"gpt-4o-mini|gpt-4\.1-mini|Phi-4|llama-3\.1-8B|Mistral-small", 1, "meta", 131_072),
-        ),
-        fallback_models=("openai/gpt-4o-mini", "meta/Llama-3.3-70B-Instruct"),
-        note="Free inference for any GitHub account — paste a classic PAT or set GITHUB_TOKEN. "
-             "Copilot sign-in is separate (that lane carries Claude/GPT models on your plan).",
-        source="https://docs.github.com/en/github-models"),
 )}
 
 # Starting trust per model family (added to the size class's prior). Families with no

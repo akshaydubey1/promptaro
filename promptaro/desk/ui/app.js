@@ -508,7 +508,7 @@ async function openConnections() {
     <button class="btn" data-recheck="1">Check again</button></div>`;
   rows.push(planRow(subs.claude_code || {}, "Claude subscription (Claude Code)", "Claude Code", "claude", "https://docs.claude.com/en/docs/claude-code/setup"));
   rows.push(planRow(subs.codex || {}, "ChatGPT subscription (Codex CLI)", "Codex CLI", "codex login", "https://developers.openai.com/codex/cli"));
-  try { const f = await api("/api/free"); rows.push(planRows(f), freeRows(f)); } catch {}
+  try { rows.push(freeRows(await api("/api/free"))); } catch {}
   rows.push(`<div class="conn-row"><span class="dot ${s.ollama.length ? "on" : ""}"></span><span class="grow"><strong>Ollama (local models)</strong><br><span class="sub">${s.ollama.length ? esc(s.ollama.join(", ")) : "Start Ollama and it's picked up automatically"}</span></span></div>`);
   const fm = (s.settings || {}).free_models || "chat";
   const q = s.free_quota;
@@ -569,33 +569,8 @@ $("anyKeyBtn").onclick = () => { const k = $("anyKey").value.trim(); $("anyKey")
 $("anyKey").addEventListener("keydown", (e) => { if (e.key === "Enter") $("anyKeyBtn").click(); });
 $("openConnections").onclick = () => { connMsg(); openConnections(); };
 $("connClose").onclick = async () => { $("connDlg").close(); await loadModels(); if (!S.current) welcome(); };
-async function copilotSignIn(btn) {
-  btn.disabled = true; btn.textContent = "Waiting for GitHub…";
-  try {
-    const d = await api("/connect/copilot/device", { method: "POST" });
-    connMsg("ok", `Sign in to GitHub: go to ${d.verification_uri} and enter code <b style="font-size:1.4em">${esc(d.user_code)}</b>`,
-      "Waiting for you to approve… (opening it in your browser)");
-    window.open(d.verification_uri, "_blank", "noopener");
-    const deadline = Date.now() + (d.expires_in || 900) * 1000;
-    let wait = Math.max(2, d.interval || 5) * 1000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, wait));
-      const s = await api("/connect/copilot/device/status");
-      if (s.status === "pending") { wait = Math.max(2, s.interval || 5) * 1000; continue; }
-      if (s.status === "connected") {
-        connMsg("ok", `GitHub Copilot connected. ${s.models ?? "Your plan's"} models are ready — they use your plan, not metered billing.`);
-        await loadModels(); return openConnections();
-      }
-      connMsg("bad", s.detail || "GitHub sign-in did not complete."); return;
-    }
-    connMsg("bad", "GitHub sign-in expired — try again.");
-  } catch (err) { connMsg("bad", err.message); }
-  finally { btn.disabled = false; btn.textContent = "Sign in with GitHub"; }
-}
-
 $("connBody").addEventListener("click", async (e) => {
   if (e.target.dataset.recheck) { e.target.textContent = "Checking…"; await api("/api/subscriptions?refresh=1"); await loadModels(); return openConnections(); }
-  if (e.target.dataset.copilot) return copilotSignIn(e.target);
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on) {
     const inp = $("connBody").querySelector(`[data-key="${on}"]`); const k = inp.value.trim(); inp.value = "";
@@ -629,21 +604,10 @@ function limitText(l) {
 }
 const privacyBadge = (p) => p.trains ? '<span class="badge trains" title="Its free tier may use your prompts for training. Used for chats only unless you allow it for code.">May train on prompts</span>'
   : '<span class="badge private" title="Its free tier does not use your prompts for training">Doesn\'t train on prompts</span>';
-function planRows(d) {
-  const used = Object.fromEntries((d.usage || []).map((u) => [u.id, u]));
-  return d.providers.filter((p) => p.plan).map((p) => {
-    const u = used[p.id];
-    const today = u ? `<br><span class="sub">Today: ${k(u.requests_today)} requests · ${k(u.tokens_today)} tokens</span>` : "";
-    const right = p.connected ? `<span class="sub">Connected</span><button class="btn" data-off="${p.id}">Disconnect</button>`
-      : `<button class="btn primary" data-copilot="1">Sign in with GitHub</button>`;
-    return `<div class="conn-row"><span class="dot ${p.connected ? "on" : ""}"></span><span class="grow"><strong>${esc(p.label)}</strong><br><span class="sub">${esc(p.note)}</span>${today}</span>${right}</div>`;
-  }).join("");
-}
-
 function freeRows(d) {
   const used = Object.fromEntries((d.usage || []).map((u) => [u.id, u]));
   return `<div class="free-head"><h3>Free providers</h3><span class="fine">One free key each. Promptaro tracks every limit and moves on when one runs out.</span></div>` +
-    d.providers.filter((p) => !p.plan).map((p) => {
+    d.providers.map((p) => {
       const u = used[p.id];
       const today = u ? `<br><span class="sub">Today: ${k(u.requests_today)} requests · ${k(u.tokens_today)} tokens${u.paused ? ` · <b>${u.paused === "daily" ? "daily limit reached" : "rate-limited, back in a minute"}</b>` : ""}</span>` : "";
       const right = p.connected ? `<span class="sub">Connected</span><button class="btn" data-off="${p.id}">Disconnect</button>`

@@ -184,7 +184,7 @@ class Router:
         if req.private:
             pool = [m for m in pool if not (m.extra.get("free") and m.extra.get("trains"))]
         if not self._allow_free(req):
-            pool = [m for m in pool if not (m.extra.get("free") and not m.extra.get("plan"))]
+            pool = [m for m in pool if not m.extra.get("free")]
         return pool
 
     async def _maybe_llm_classify(self, req: RunRequest, profile: TaskProfile) -> TaskProfile:

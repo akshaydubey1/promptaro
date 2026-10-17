@@ -80,18 +80,11 @@ Promptaro checks this computer for the two official coding tools that run on a p
 |---|---|---|
 | Claude Pro / Max | **Claude Code** | `claude auth status` reports a Claude account sign-in |
 | ChatGPT Plus / Pro / Business | **Codex CLI** | `codex login status` reports "Logged in using ChatGPT" |
-| GitHub Copilot (any plan) | **Copilot API** | Connections → "Sign in with GitHub" (device sign-in, no key to paste) |
 
 When either is signed in, **hard agent tasks** run on that plan instead of per-use API billing. If a plan hits its
 usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to the regular models if
 neither has room. Nothing to configure: Connections shows what was detected, and the Model menu lets you pick a
 plan for a task.
-
-**GitHub Copilot** works differently: signing in once gives the router a whole lane of plan models — Claude, GPT,
-Gemini and Grok — that chats and coding tools can use at no metered cost. The token lives in your keychain and
-Promptaro exchanges it for short-lived session tokens, exactly like the editor plugins do. If you're not signed in,
-the lane simply doesn't exist in the catalog and nothing tries to use it. Premium models may still count against
-your plan's monthly premium-request allowance.
 
 Promptaro never reads or stores either login. It runs the unmodified `claude` or `codex` program in the task's
 own branch and shows its progress. Claude Code may only edit files and run tests and linters on its own (pushes,
@@ -144,7 +137,7 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 74 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 75 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
 
 ## Migrating from Tillwright

@@ -6,7 +6,6 @@ Completion with text + real token usage reported by the provider.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import time
@@ -15,7 +14,7 @@ from typing import Callable
 
 import httpx
 
-from . import copilot, secrets
+from . import secrets
 from .registry import ModelSpec
 
 
@@ -239,33 +238,6 @@ class OpenAIProvider(Provider):
         return Completion(text, tin, tout, (time.perf_counter() - t0) * 1000, stop, cached, {}, hdrs)
 
 
-class CopilotProvider(OpenAIProvider):
-    """The person's GitHub Copilot plan, reached through the Copilot chat API.
-
-    The stored credential is the GitHub OAuth token; each call exchanges it
-    for a short-lived Copilot service token (cached until near expiry) and
-    uses whichever API endpoint GitHub hands back.
-    """
-
-    async def _headers(self, spec, base: str) -> dict:
-        token, _ = await copilot.aservice_token(self.client)
-        return copilot.chat_headers(token)
-
-    async def complete(self, spec, system, user, max_tokens, **kw):
-        _, api = await copilot.aservice_token(self.client)
-        return await super().complete(_replace_base(spec, api), system, user, max_tokens, **kw)
-
-    async def stream(self, spec, system, user, max_tokens, on_delta, **kw):
-        _, api = await copilot.aservice_token(self.client)
-        return await super().stream(_replace_base(spec, api), system, user, max_tokens, on_delta, **kw)
-
-
-def _replace_base(spec: ModelSpec, base: str) -> ModelSpec:
-    if spec.base_url == base:
-        return spec
-    return dataclasses.replace(spec, base_url=base)
-
-
 class OfflineProvider(Provider):
     """No-AI fallback: keeps the system usable (and testable) with no keys."""
 
@@ -281,6 +253,5 @@ def build_providers(client: httpx.AsyncClient) -> dict[str, Provider]:
         "anthropic": AnthropicProvider(client),
         "openai": OpenAIProvider(client, compatible=False),
         "openai_compatible": OpenAIProvider(client, compatible=True),
-        "github_copilot": CopilotProvider(client, compatible=True),
         "offline": OfflineProvider(),
     }

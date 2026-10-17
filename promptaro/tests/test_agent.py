@@ -116,6 +116,27 @@ def test_env_scrub_covers_credential_shapes(monkeypatch):
     assert env["NORMAL_URL"] == "http://localhost:8000" and "HOME" in env
 
 
+def test_env_scrub_removes_half_git_config_and_repo_pointers(monkeypatch, tmp_path):
+    """CI/Codespaces set GIT_CONFIG_COUNT + GIT_CONFIG_KEY_*/VALUE_*. Scrubbing the keys but not the
+    count makes EVERY git call fail; GIT_DIR et al. would point commands at the wrong repo."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "store")
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/elsewhere")
+    env = _clean_env()
+    for k in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_DIR", "GIT_WORK_TREE"):
+        assert k not in env
+    # real git works under the scrubbed env (would fail with a dangling GIT_CONFIG_COUNT)
+    repo = tmp_path / "r"
+    repo.mkdir()
+    import subprocess
+    r = subprocess.run(["git", "init", "-q"], cwd=repo, env=env, capture_output=True)
+    assert r.returncode == 0
+    r = subprocess.run(["git", "status", "--porcelain"], cwd=repo, env=env, capture_output=True)
+    assert r.returncode == 0
+
+
 def test_edit_requires_unique_match(tmp_path):
     (tmp_path / "f.py").write_text("x = 1\nx = 1\n")
     ws = Workspace(tmp_path)

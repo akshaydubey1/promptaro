@@ -130,7 +130,7 @@ def route(reg: Registry, store: Store, profile: TaskProfile, *, prefer: str = "b
             if not ok:
                 free_skipped = free_skipped or why
                 continue
-        if m.extra.get("free") and not m.extra.get("plan") and m.id != force_model and \
+        if m.extra.get("free") and m.id != force_model and \
                 (not allow_free or (not free_ok and not m.extra.get("quota"))):
             snap = catalog.FREE.snapshot() if allow_free else {}
             free_skipped = ("free models are switched off for this kind of work" if not allow_free else
