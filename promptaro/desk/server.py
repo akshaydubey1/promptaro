@@ -13,6 +13,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -40,7 +41,7 @@ from .store import Store  # noqa: E402
 from router import migrate  # noqa: E402
 
 STARTED_BUILD = build()        # code version this process loaded
-DATA = migrate.home("TILLWRIGHT_HOME")
+DATA = migrate.home()
 desk: Desk | None = None
 
 
@@ -49,7 +50,8 @@ async def lifespan(app: FastAPI):
     global desk
     _private_dir(DATA)                                   # sessions, worktrees, caches — keep to this user
     _private_dir(gitops.HOME / "worktrees")
-    router = Router(Path(os.environ.get("SMART_ROUTER_ROOT", ROUTER_ROOT)), db_path=os.environ.get("ROUTER_DB"))
+    router = Router(Path(os.environ.get("SMART_ROUTER_ROOT", ROUTER_ROOT)),
+                    db_path=os.environ.get("ROUTER_DB") or DATA / "router.db")
     app.state.router = router
     desk = Desk(router, Store(os.environ.get("PROMPTARO_DB") or os.environ.get("TILLWRIGHT_DB")
                               or DATA / "desk.db"))
@@ -327,9 +329,15 @@ class CommitBody(BaseModel):
     message: str = Field("", max_length=2000)
 
 
+def _agent(s) -> None:
+    """Git endpoints only make sense for agent sessions with a worktree."""
+    if s["kind"] != "agent" or not s.get("worktree"):
+        raise HTTPException(400, "This conversation has no project folder.")
+
+
 @app.post("/api/sessions/{sid}/commit")
 async def commit(sid: str, b: CommitBody):
-    s = _s(sid)
+    s = _s(sid); _agent(s)
     try:
         sha = await gitops.commit(s["worktree"], b.message or f"{s['title']}\n\nMade with Promptaro")
     except gitops.GitError as e:
@@ -340,7 +348,7 @@ async def commit(sid: str, b: CommitBody):
 
 @app.post("/api/sessions/{sid}/merge")
 async def merge(sid: str):
-    s = _s(sid)
+    s = _s(sid); _agent(s)
     try:
         await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Promptaro")
         sha = await gitops.merge_into_base(s["repo"], s["branch"], s["base_branch"])
@@ -354,7 +362,7 @@ async def merge(sid: str):
 
 @app.post("/api/sessions/{sid}/pr")
 async def pr(sid: str):
-    s = _s(sid)
+    s = _s(sid); _agent(s)
     summary = next((e["data"].get("summary", "") for e in reversed(desk.store.events(sid)) if e["kind"] == "finish"), "")
     try:
         await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Promptaro")
@@ -367,7 +375,7 @@ async def pr(sid: str):
 
 @app.post("/api/sessions/{sid}/discard")
 async def discard(sid: str):
-    s = _s(sid)
+    s = _s(sid); _agent(s)
     finished = s["status"] == "review" and any(e["kind"] == "finish" for e in desk.store.events(sid))
     desk.stop(sid)
     await gitops.discard(s["repo"], s["worktree"], s["branch"])
@@ -527,20 +535,27 @@ async def pick_folder():
     return {"path": p.rstrip("/\\") if len(p) > 3 else p}
 
 
+_stream_keys: dict[str, float] = {}       # short-lived SSE keys (single use, ~60s)
+
+
 @app.post("/api/stream-key")
 async def stream_key():
-    """Token for the SSE stream, handed out only to requests carrying the app header."""
-    from router.gateway import gateway_token
-    return {"key": gateway_token()}
+    """A short-lived token for the SSE stream — NOT the gateway token, which stays out of URLs."""
+    import secrets as _sec
+    now = time.time()
+    for k in [k for k, exp in _stream_keys.items() if exp <= now]:
+        _stream_keys.pop(k, None)
+    key = "sk-" + _sec.token_urlsafe(24)
+    _stream_keys[key] = now + 60
+    return {"key": key}
 
 
 @app.get("/api/stream")
 async def stream(request: Request, key: str = ""):
     """One live stream for everything; the UI filters by session. EventSource can't send
-    headers, so the same token that guards the gateway authenticates the stream instead."""
-    from router.gateway import gateway_token
-    import secrets as _sec
-    if not _sec.compare_digest(key, gateway_token()):
+    headers, so the stream key rides in the URL — it expires in a minute and is single-use."""
+    exp = _stream_keys.get(key)                 # reusable within its minute so EventSource auto-reconnects
+    if exp is None or exp < time.time():
         raise HTTPException(401, "The event stream needs a stream key.")
     q = desk.store.subscribe("*")
 

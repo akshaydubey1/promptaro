@@ -27,7 +27,7 @@ def claude(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("mode,sub", [("sub", True), ("api", False), ("none", False)])
 def test_detects_subscription(claude, monkeypatch, mode, sub):
-    monkeypatch.setenv("FAKE_CLAUDE_AUTH", mode)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", mode)
     st = asyncio.run(workers.claude_status(force=True))
     assert st["installed"] and st["subscription"] is sub
 
@@ -83,7 +83,7 @@ def test_falls_back_when_claude_code_fails(claude, monkeypatch, desk_factory, re
 
 
 def test_not_signed_in_uses_router(claude, monkeypatch, desk_factory, repo):
-    monkeypatch.setenv("FAKE_CLAUDE_AUTH", "none")
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "none")
     fake = Scripted([act("finish", summary="router")])
     desk = desk_factory(fake)
     _run(desk, repo, HARD)

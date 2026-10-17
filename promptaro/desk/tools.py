@@ -49,17 +49,24 @@ _SAFE = re.compile(r"""^\s*(
     docker\s+(ps|images)|shellcheck|hadolint|yamllint
 )(\s|$)""", re.X)
 _NEVER = re.compile(
-    r"(\bsudo\b|\bdoas\b|\bsu\s+-|rm\s+-[a-z]*[rf][a-z]*\s+(-\S+\s+)*(/|~|\$HOME|\.(\s|$))|:\(\)\s*\{"
-    r"|\bmkfs|\bdd\s+if=|\bshred\b|>\s*/dev/sd|\bchmod\s+-R\b|\bchown\s+-R\b|\bgit\s+clean\b"
+    r"(\bsudo\b|\bdoas\b|\bsu\s+-"
+    r"|rm\s+(-{1,2}[a-z-]*[rf][a-z-]*\s+)+(-{1,2}\S+\s+)*(/|~|\$\{?HOME\}?|\.{2}(?=[\s/]|$)|\.(?=\s|$))"
+    r"|:\(\)\s*\{|\bmkfs|\bdd\b[^|;&]*\bof=/dev|\bshred\b|>\s*/dev/(?!null|zero|tty|stdin|stdout|stderr\b)"
+    r"|\bchmod\s+-R\b|\bchown\s+-R\b|\bgit\s+clean\b"
     r"|\bformat\b\s+[a-z]:|\bdel\s+/[fsq]|\brd\s+/s\b|\brmdir\s+/s\b)", re.I)
 _SPLIT = re.compile(r"&&|\|\||;|\||&|\n")
 _SUBST = re.compile(r"`|\$\(|<\(|>\(")
-_REDIR = re.compile(r"(?:^|[^>&])>>?\s*([^\s;&|><]+)")          # > / >> targets (not >&)
+_SUBST_INNER = re.compile(r"\$\(([^)]*)\)|`([^`]*)`")
+_REDIR = re.compile(r"(?:^|[^>&])(?:&>>?|>>?)\s*([^\s;&|><]+)")  # > / >> / &> targets (not >&)
 _READ_ANYWHERE = re.compile(r"^\s*(cat|head|tail|wc|grep|rg|find|ls|tree|diff|sort|uniq|stat|file|du)\b")
+_WRITE_ANYWHERE = re.compile(r"^\s*(tee|cp|mv|rsync|install|dd|ln|scp|curl|wget|chmod|chown)\b")
+_RISKY = re.compile(
+    r"\bfind\b[^|;&]*\s-(delete|exec|execdir|ok)\b|\bgit\s+branch\s+[^|;&]*-[dDmM]\b|"
+    r"\bgit\s+push\b|\bxargs\b[^|;&]*\brm\b", re.I)
 
 
 def _inside_root(target: str, root: Path | None) -> bool | None:
-    """Is a path argument inside the workspace? /dev/* devices are fine.
+    """Is a path argument inside the workspace? Safe /dev sinks are fine.
     Returns None when no workspace is known and the path can't be vetted."""
     if root is None:
         return None
@@ -72,14 +79,15 @@ def _inside_root(target: str, root: Path | None) -> bool | None:
         full = full.resolve()
     except (OSError, RuntimeError):
         return False
-    if str(full).startswith(("/dev/", "NUL")):
+    if str(full) in ("/dev/null", "/dev/zero", "/dev/tty", "/dev/stdin",
+                     "/dev/stdout", "/dev/stderr", "NUL"):
         return True
     return full == root or root in full.parents
 
 
-def _reads_paths_outside(part: str, root: Path | None) -> bool:
-    """A 'safe' read command (cat, grep, find, ...) pointing at files outside the workspace."""
-    if root is None or not _READ_ANYWHERE.match(part):
+def _paths_outside(part: str, root: Path | None) -> bool:
+    """A read/write command (cat, grep, cp, tee, ...) pointing at paths outside the workspace."""
+    if root is None or not (_READ_ANYWHERE.match(part) or _WRITE_ANYWHERE.match(part)):
         return False
     for tok in part.split()[1:]:
         if tok.startswith("-") or tok == "--":
@@ -92,33 +100,45 @@ def _reads_paths_outside(part: str, root: Path | None) -> bool:
 
 
 def needs_approval(command: str, policy: str, root: Path | None = None) -> bool | None:
-    """True = ask the user, False = run, None = refuse outright."""
-    if _NEVER.search(command):
+    """True = ask the user, False = run, None = refuse outright.
+    The policy only decides whether risky commands prompt; catastrophe and
+    exfiltration checks (outside-workspace reads/writes, destructive constructs)
+    apply under every policy, including never_ask."""
+    norm = command.replace('"', "").replace("'", "")             # quotes don't hide targets
+    if _NEVER.search(norm):
         return None
-    if _SUBST.search(command):
-        # Command/process substitution can smuggle anything past the safe list.
-        return True if policy != "never_ask" else False
+    unattended = policy == "never_ask"
+
+    def blocked() -> bool | None:
+        return None if unattended else True                     # can't ask with no human in the loop
+
+    for inner in _SUBST_INNER.findall(command):
+        # Command substitution can smuggle anything past the safe list: vet the
+        # inner command with the same rules (e.g. `echo $(find ~ -delete)`).
+        inner = inner[0] or inner[1]
+        if inner and needs_approval(inner, policy, root) is not False:
+            return blocked()
+    if _SUBST.search(command) and not unattended:
+        return True                                             # asks, even when inner commands looked safe
     for target in _REDIR.findall(command):
         inside = _inside_root(target, root)
         if inside is False:
-            # Provably outside the workspace: ask, or refuse outright when unattended.
-            return True if policy != "never_ask" else None
+            return blocked()                                    # provably outside the workspace
         if inside is None:
             # No workspace to vet against: ask, unless the user opted out of asking.
-            return True if policy != "never_ask" else False
-    if policy == "never_ask":
+            return False if unattended else True
+    if _RISKY.search(norm):
+        return blocked()
+    parts = [p.strip() for p in _SPLIT.split(command) if p.strip()]
+    for p in parts:
+        if _paths_outside(p, root):
+            return blocked()
+    if unattended:
         return False
     if policy == "always_ask":
         return True
-    if re.search(r"\bfind\b.*\s-(delete|exec|execdir|ok)\b|\bgit\s+branch\s+.*-[dDmM]\b", command):
-        return True
-    parts = [p.strip() for p in _SPLIT.split(command) if p.strip()]
-    if not parts:
-        return False
     for p in parts:
         if not _SAFE.match(p):
-            return True
-        if _reads_paths_outside(p, root):
             return True
     return False
 

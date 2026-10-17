@@ -205,3 +205,34 @@ def test_routing_under_100ms(make_router):
         times.append((time.perf_counter() - t) * 1000)
     p99 = sorted(times)[int(len(times) * 0.99) - 1]
     assert p99 < 100, f"p99 routing {p99:.2f}ms; median {statistics.median(times):.2f}ms"
+
+
+# -------------------------------------------------------------- quota accounting
+def test_forced_model_still_uses_quota_ledger(make_router, monkeypatch):
+    """A forced free-tier model must still reserve/settle — selection is forced, accounting isn't."""
+    from router import quota
+    from router.registry import ModelSpec
+    r, fake = make_router({"free-q": [GOOD_PY]})
+    r.registry.models["free-q"] = ModelSpec(
+        id="free-q", provider="anthropic", model="q", tier=1, context_window=200000,
+        capabilities={"json"}, price_in=0, price_out=0, latency_ms_p50=100, prior={}, api_key_env="",
+        extra={"quota": "groq", "free": True, "limits": {"rpm": 30, "rpd": 100, "tpm": 8000}})
+    calls = []
+    orig = quota.LEDGER.begin
+    monkeypatch.setattr(quota.LEDGER, "begin",
+                        lambda spec, est=0: (calls.append(spec.id), orig(spec, est))[1])
+    res = run(r, instruction="Write a Python function `add` that sums two ints", force_model="free-q")
+    assert "free-q" in calls
+
+
+def test_secondary_calls_use_quota_ledger(make_router, monkeypatch):
+    """Review/classify helper calls count against the ledger like primary calls."""
+    from router import quota
+    from router.registry import ModelSpec
+    r, fake = make_router({"free-q": [GOOD_PY]})
+    r.registry.models["free-q"] = ModelSpec(
+        id="free-q", provider="anthropic", model="q", tier=1, context_window=200000,
+        capabilities={"json"}, price_in=0, price_out=0, latency_ms_p50=100, prior={}, api_key_env="",
+        extra={"quota": "groq", "free": True, "limits": {"rpm": 30, "rpd": 100, "tpm": 8000}})
+    c = asyncio.run(r._secondary_call(r.registry.models["free-q"], "sys", "u", 10))
+    assert c is not None and sum(v[0] for v in quota.LEDGER.daily.values()) == 1

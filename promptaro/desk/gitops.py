@@ -16,7 +16,7 @@ from pathlib import Path
 from .tools import _clean_env
 
 HOME = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("TILLWRIGHT_HOME")
-            or Path.home() / ".promptaro")
+            or os.environ.get("ROUTER_HOME") or Path.home() / ".promptaro")
 
 
 # Never shown in reviews or committed, even in repos without a .gitignore.
@@ -45,7 +45,12 @@ async def git(*args: str, cwd: str | Path, check: bool = True, timeout: float = 
                                                     stderr=asyncio.subprocess.PIPE)
     except FileNotFoundError:
         raise GitError("git isn't installed or isn't on PATH. Install git, then try again.")
-    out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise GitError(f"git {args[0]} timed out after {timeout}s and was stopped")
     if check and proc.returncode != 0:
         raise GitError((err or out).decode(errors="replace").strip() or f"git {args[0]} failed")
     return out.decode(errors="replace")
@@ -149,8 +154,10 @@ async def open_pr(wt: str, branch: str, title: str, body: str) -> str:
         raise GitError("This repo has no remote to push to.")
     # SSH_AUTH_SOCK only for the push: ssh remotes need the agent, and hooks are already off.
     await git("push", "-u", remote[0], branch, cwd=wt, timeout=300, keep_env=("SSH_AUTH_SOCK",))
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "USER", "LANG", "GH_TOKEN", "GITHUB_TOKEN",
+                                     "SSH_AUTH_SOCK", "XDG_CONFIG_HOME") if k in os.environ}
     proc = await asyncio.create_subprocess_exec("gh", "pr", "create", "--title", title, "--body", body,
-                                                "--head", branch, cwd=wt, stdout=asyncio.subprocess.PIPE,
+                                                "--head", branch, cwd=wt, env=env, stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.PIPE)
     out, err = await proc.communicate()
     if proc.returncode != 0:

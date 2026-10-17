@@ -201,7 +201,11 @@ class Desk:
         s = self.store.create("agent", task.splitlines()[0][:80], project=str(repo), repo=str(repo),
                               prefer=prefer, model=model or "", approval=approval,
                               state={"max_cost": max_cost})
-        info = await gitops.create_worktree(repo, s["id"], task)
+        try:
+            info = await gitops.create_worktree(repo, s["id"], task)
+        except Exception:
+            self.store.delete(s["id"])                # no dead session left in the sidebar
+            raise
         self.store.update(s["id"], worktree=info["worktree"], branch=info["branch"],
                           base_branch=info["base_branch"], base_sha=info["base_sha"])
         self.store.emit(s["id"], "user", {"text": task})

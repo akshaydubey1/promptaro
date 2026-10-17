@@ -152,11 +152,11 @@ class Store:
         with self._lock:
             self._db.execute("INSERT INTO spend(day,usd) VALUES (?,?) "
                              "ON CONFLICT(day) DO UPDATE SET usd=usd+excluded.usd",
-                             (datetime.date.today().isoformat(), usd))
+                             (datetime.datetime.now(datetime.timezone.utc).date().isoformat(), usd))
 
     def spend_today(self) -> float:
         row = self._db.execute("SELECT usd FROM spend WHERE day=?",
-                               (datetime.date.today().isoformat(),)).fetchone()
+                               (datetime.datetime.now(datetime.timezone.utc).date().isoformat(),)).fetchone()
         return float(row[0]) if row else 0.0
 
     def stats(self) -> list[dict]:

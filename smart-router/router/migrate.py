@@ -32,12 +32,19 @@ def legacy_dirs() -> list[Path]:
     return [Path(os.environ.get(env) or d).expanduser() for d, env in _LEGACY_ENVS.items()]
 
 
-def home(*extra_envs: str) -> Path:
-    """The Promptaro data directory, migrating legacy installs on first use.
-    PROMPTARO_HOME wins, then the caller's legacy env var (ROUTER_HOME / TILLWRIGHT_HOME)."""
-    p = Path(os.environ.get("PROMPTARO_HOME")
-             or next((os.environ[e] for e in extra_envs if os.environ.get(e)), None)
-             or Path.home() / ".promptaro")
+_HOME_ENVS = ("PROMPTARO_HOME", "TILLWRIGHT_HOME", "ROUTER_HOME")
+
+
+def home_path() -> Path:
+    """Resolve the Promptaro data directory without migrating. One canonical order
+    everywhere: PROMPTARO_HOME > TILLWRIGHT_HOME > ROUTER_HOME > ~/.promptaro."""
+    return Path(next((os.environ[e] for e in _HOME_ENVS if os.environ.get(e)), None)
+                or Path.home() / ".promptaro")
+
+
+def home() -> Path:
+    """The Promptaro data directory, migrating legacy installs on first use."""
+    p = home_path()
     migrate(p)
     return p
 
@@ -87,8 +94,9 @@ def _rewrite_worktree_paths(db: Path, new: Path) -> None:
     try:
         con = sqlite3.connect(str(db))
         for old in legacy_dirs():
-            con.execute("UPDATE sessions SET worktree=? || substr(worktree, ?) WHERE worktree LIKE ?",
-                        (str(new), len(str(old)) + 1, str(old) + "/%"))
+            con.execute("UPDATE sessions SET worktree=? || substr(worktree, ?) "
+                        "WHERE substr(worktree, 1, ?) = ?",
+                        (str(new), len(str(old)) + 1, len(str(old)) + 1, str(old) + "/"))
         con.commit()
         con.close()
     except sqlite3.Error:

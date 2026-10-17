@@ -23,7 +23,7 @@ import httpx
 from . import migrate, secrets
 from .free_providers import FAMILY_TRUST, FREE_PROVIDERS, limits_for, pick_models
 
-HOME = migrate.home("ROUTER_HOME")          # ~/.promptaro, migrating ~/.akshay-router & ~/.tillwright
+HOME = migrate.home()                        # ~/.promptaro, migrating ~/.akshay-router & ~/.tillwright
 OR_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OR_BASE = "https://openrouter.ai/api/v1"
 

@@ -11,8 +11,9 @@ HERE="$(pwd)"
 PORT="${PROMPTARO_PORT:-${TILLWRIGHT_PORT:-8770}}"
 URL="http://localhost:$PORT"
 BG=0; [ "$1" = "--background" ] && BG=1
-LOG="${PROMPTARO_LOG:-${TILLWRIGHT_LOG:-$HOME/.promptaro/promptaro.log}}"
-mkdir -p "$(dirname "$LOG")" "$HOME/.promptaro"
+DATA_DIR="${PROMPTARO_HOME:-${TILLWRIGHT_HOME:-$HOME/.promptaro}}"
+LOG="${PROMPTARO_LOG:-${TILLWRIGHT_LOG:-$DATA_DIR/promptaro.log}}"
+mkdir -p "$(dirname "$LOG")" "$DATA_DIR"
 export SMART_ROUTER_ROOT="${SMART_ROUTER_ROOT:-$(cd ../smart-router 2>/dev/null && pwd)}"
 
 say() {   # progress: Terminal text, or a desktop notification when running in the background
@@ -72,7 +73,7 @@ fi
 OPENER=$!
 if [ $BG = 1 ]; then
   nohup .venv/bin/python -m uvicorn desk.server:app --host 127.0.0.1 --port "$PORT" --log-level warning >>"$LOG" 2>&1 &
-  echo $! > "$HOME/.promptaro/promptaro.pid"
+  echo $! > "$DATA_DIR/promptaro.pid"
   wait $OPENER || true                 # return once the window is open
   curl -fsS "$URL/healthz" >/dev/null 2>&1 || fail "It stopped while starting."
   exit 0

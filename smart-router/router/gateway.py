@@ -360,6 +360,9 @@ def _sticky_pick(key: str, model_id: str) -> None:
     now = time.time()
     for k in [k for k, (exp, _) in _sticky.items() if exp <= now]:
         _sticky.pop(k, None)
+    if len(_sticky) >= 1000:                                   # bound memory: drop the oldest entries
+        for k in sorted(_sticky, key=lambda k: _sticky[k][0])[:200]:
+            _sticky.pop(k, None)
     _sticky[key] = (now + _STICKY_TTL, model_id)
 
 
@@ -396,8 +399,7 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
         return True
 
     exact = reg.models.get(requested)
-    if exact and usable_for_gateway(exact):
-        return [exact]
+    exact = exact if exact and usable_for_gateway(exact) else None
     text = _last_user_text(messages)
     prof = classify(text[:20_000])
     prefer, floor, ceil = _hint(requested)
@@ -413,6 +415,8 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
     d = route(reg, router.store, prof, prefer=prefer, allow_free=mode != "off", private=mode != "all",
               require=need, est_output=est_out)
     seen, out = set(), []
+    if exact:
+        out.append(exact); seen.add(exact.id)               # named model first, normal rungs after it
     rest = sorted((c for c in d.considered), key=lambda c: (not c.clears_bar, -c.score))
     for c in [d.primary, *d.ladder, *rest]:
         if c.model.id in seen or not usable_for_gateway(c.model):
@@ -421,7 +425,7 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
         out.append(c.model)
     out = out[:MAX_CANDIDATES]
     hit = _sticky.get(_stick_key(messages, tools))
-    if hit and hit[0] > time.time():
+    if not exact and hit and hit[0] > time.time():          # an explicit model beats stickiness
         for i, m in enumerate(out):                    # stay on this conversation's model when it still qualifies
             if m.id == hit[1]:
                 out.insert(0, out.pop(i))
@@ -501,7 +505,7 @@ def _failed(router, spec, err: Exception, tried: list) -> None:
     if transient is None:
         status = getattr(err, "status", None)
         transient = status is None or status in (408, 409, 425, 429, 529) or status >= 500
-    tried.append((f"{spec.extra.get('name', spec.id)}: {str(err)[:160]}", transient))
+    tried.append((f"{spec.extra.get('name', spec.id)}: {secrets.redact(str(err))[:160]}", transient))
 
 
 def _gave_up(tried: list) -> bool:
@@ -796,15 +800,3 @@ async def chat_completions(request: Request):
                 _account(router, spec, tin, tout, hdr, res, stick)
         return StreamingResponse(pipe(), media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
     return _all_failed(tried or [(s, True) for s in skipped], anthropic=False)
-
-
-def client_setup(base_url: str) -> dict:
-    """How to point each coding tool at the gateway."""
-    t = gateway_token()
-    return {
-        "base_url": base_url, "token": t,
-        "claude_code": {"env": {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": t,
-                                "ANTHROPIC_API_KEY": ""}},
-        "openai_compatible": {"base_url": f"{base_url}/v1", "api_key": t, "model": "promptaro-auto"},
-        "checked": time.strftime("%Y-%m-%d"),
-    }

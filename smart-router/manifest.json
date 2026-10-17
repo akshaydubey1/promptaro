@@ -2,7 +2,7 @@
   "$schema": "https://akshay-software-hub/schemas/manifest.v1.json",
   "id": "smart-router",
   "name": "Promptaro Smart Router",
-  "description": "One instruction in, the right model out: picks the cheapest model that meets the quality bar, checks the result and escalates when needed. Also where AI accounts are connected. Start with ./run.sh router.",
+  "description": "One instruction in, the right model out: picks the cheapest model that meets the quality bar, checks the result and escalates when needed. Also where AI accounts are connected. Start with 'Start Smart Router.command' or uvicorn router.api:app.",
   "icon": "zap",
   "color": "#2F8F83",
   "category": "AI Agents",
@@ -13,14 +13,35 @@
   "url": "http://localhost:8765/",
   "apiEndpoint": null,
   "healthCheckUrl": "http://localhost:8765/healthz",
-  "allowedOrigins": ["http://localhost:8765"],
+  "allowedOrigins": [
+    "http://localhost:8765"
+  ],
   "authMethod": "none",
   "credentialRef": null,
   "permissions": [],
   "aiRequired": false,
   "aiOptional": true,
-  "supportedProviders": ["openrouter", "claude", "openai", "gemini", "ollama"],
-  "capabilities": [{"key": "router.run", "aiMode": "required", "label": "Route an instruction to the best model"}],
-  "timeouts": {"connectMs": 3000, "readMs": 120000},
-  "healthCheck": {"intervalSeconds": 60, "failureThreshold": 3, "timeoutMs": 3000}
+  "supportedProviders": [
+    "openrouter",
+    "claude",
+    "openai",
+    "gemini",
+    "ollama"
+  ],
+  "capabilities": [
+    {
+      "key": "router.run",
+      "aiMode": "required",
+      "label": "Route an instruction to the best model"
+    }
+  ],
+  "timeouts": {
+    "connectMs": 3000,
+    "readMs": 120000
+  },
+  "healthCheck": {
+    "intervalSeconds": 60,
+    "failureThreshold": 3,
+    "timeoutMs": 3000
+  }
 }

@@ -19,7 +19,7 @@ from typing import Callable
 
 import httpx
 
-from . import catalog, quota
+from . import catalog, quota, secrets
 from . import checks as ck
 from .classifier import TASK_TYPES, TaskProfile, classify, estimate_tokens, needs_for
 from .context import fit_context
@@ -194,11 +194,13 @@ class Router:
         pool = self._secondary_pool(req)
         if not pool:
             return profile
-        m = min(pool, key=lambda m: m.price_in + m.price_out)
         sys_p = ("Classify the task. Reply with JSON only: {\"task_type\": one of "
                  f"{list(TASK_TYPES)}, \"complexity\": 0..1}}")
+        c = await self._secondary_call(min(pool, key=lambda m: m.price_in + m.price_out),
+                                       sys_p, req.instruction[:2000], 60, json_mode=True)
+        if c is None:
+            return profile
         try:
-            c = await self.providers[m.provider].complete(m, sys_p, req.instruction[:2000], 60, json_mode=True)
             d = json.loads(c.text[c.text.find("{"): c.text.rfind("}") + 1])
             if d.get("task_type") in TASK_TYPES:
                 profile.task_type = d["task_type"]
@@ -210,6 +212,26 @@ class Router:
         except Exception:
             pass
         return profile
+
+    async def _secondary_call(self, m: ModelSpec, system: str, user: str, max_out: int,
+                              **kw) -> Completion | None:
+        """One helper call (classify/review). Counts against the free-tier ledger
+        exactly like a primary call — secondary calls can't drain free quotas silently."""
+        res = None
+        if m.extra.get("quota"):
+            ok, _why, res = quota.LEDGER.begin(m, 1200)
+            if not ok:
+                return None
+        try:
+            c = await self.providers[m.provider].complete(m, system, user, max_out, **kw)
+            quota.LEDGER.settle(res, m, c.tokens_in + c.tokens_out, getattr(c, "headers", None))
+            if m.extra.get("free") and not m.extra.get("quota"):
+                catalog.FREE.note_used()
+            return c
+        except (ProviderError, httpx.HTTPError) as e:
+            quota.LEDGER.abandon(res)
+            quota.after_error(m, e)
+            return None
 
     # ------------------------------------------------------------------- run
     def refresh_free_quota(self) -> None:
@@ -280,9 +302,12 @@ class Router:
             if free and not m.extra.get("quota") and not catalog.FREE.available() and m.id != req.force_model:
                 continue
             res = None
-            if m.extra.get("quota") and m.id != req.force_model:
+            if m.extra.get("quota"):
                 ok, _why, res = quota.LEDGER.begin(m, profile.est_input_tokens + max_out // 2)
                 if not ok:
+                    # Forced or last-choice model: still accounted — don't bypass the ledger.
+                    result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0,
+                                                   error=f"free-tier limit reached: {_why}"))
                     continue                             # limit reached between routing and send
             prompt = user if not feedback else f"{user}\n\n{feedback}"
             prov = self.providers[m.provider]
@@ -306,7 +331,8 @@ class Router:
                     catalog.FREE.note_rate_limited(str(e))     # not the model's fault: don't trip the breaker
                 else:
                     self.registry.breaker.record(m.id, False)
-                result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0, error=str(e)[:300]))
+                result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0,
+                                               error=secrets.redact(str(e))[:300]))
                 if i == len(ladder) - 1 and free:
                     # The last option was a free model that refused: try once more without free models.
                     retry = route(self.registry, self.store, profile, prefer=req.prefer,
@@ -392,11 +418,10 @@ class Router:
         if budget_left is not None and reviewer.cost(4200, 300) > budget_left:
             return True, [], None                            # can't afford a review within the cap
         msg = f"TASK:\n{req.instruction[:4000]}\n\nRESPONSE:\n{text[:12000]}"
-        try:
-            c: Completion = await self.providers[reviewer.provider].complete(reviewer, ck.REVIEW_SYSTEM, msg, 300,
-                                                                             json_mode=True)
-        except (ProviderError, httpx.HTTPError) as e:
-            return True, [], Attempt(reviewer.id, True, 0, [], 0, 0, 0, 0, kind="review", error=str(e)[:200])
+        c: Completion | None = await self._secondary_call(reviewer, ck.REVIEW_SYSTEM, msg, 300, json_mode=True)
+        if c is None:
+            return True, [], Attempt(reviewer.id, True, 0, [], 0, 0, 0, 0, kind="review",
+                                     error="review call unavailable")
         score, issues = ck.parse_review(c.text)
         cost = reviewer.cost(c.tokens_in, c.tokens_out)
         return score >= 7, issues, Attempt(reviewer.id, score >= 7, score / 10, issues, c.tokens_in,

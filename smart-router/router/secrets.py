@@ -16,15 +16,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import threading
 from pathlib import Path
 
 SERVICE = "promptaro"
 _LEGACY_SERVICE = "akshay-smart-router"
-_FALLBACK = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("ROUTER_HOME")
-                 or Path.home() / ".promptaro") / "credentials.json"
-_LEGACY_FALLBACK = Path(os.environ.get("ROUTER_HOME") or Path.home() / ".akshay-router") / "credentials.json"
+_FALLBACK = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("TILLWRIGHT_HOME")
+                 or os.environ.get("ROUTER_HOME") or Path.home() / ".promptaro") / "credentials.json"
+_LEGACY_FALLBACK = Path(os.environ.get("AKSHAY_ROUTER_LEGACY_HOME")
+                        or Path.home() / ".akshay-router") / "credentials.json"
 _lock = threading.Lock()
 
 try:
@@ -71,11 +73,10 @@ def get(name: str) -> str:
         for service in (SERVICE, _LEGACY_SERVICE):
             try:
                 v = keyring.get_password(service, name)
-            except KeyringError:
+            except Exception:                                  # flaky backends: degrade to the file
                 v = None
             if v:
                 return v
-        return ""
     if v := _file_read().get(name):                            # noqa: E501 — read fallback file first
         return v
     try:
@@ -94,7 +95,7 @@ def set(name: str, value: str) -> None:  # noqa: A001
                 except Exception:
                     pass
                 return
-            except KeyringError:
+            except Exception:
                 pass
         d = _file_read()
         d[name] = value
@@ -116,6 +117,17 @@ def delete(name: str) -> None:
 
 def has(name: str) -> bool:
     return bool(get(name))
+
+
+_SECRET_TEXT = re.compile(
+    r"(sk-or-v1-[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|"
+    r"gsk_[A-Za-z0-9]{16,}|csk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{16,}|"
+    r"xox[bap]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+
+
+def redact(text) -> str:
+    """Provider errors sometimes echo the key that was sent — never show them."""
+    return _SECRET_TEXT.sub(lambda m: m.group(0)[:7] + "…", str(text))
 
 
 def anthropic_headers(key: str | None = None) -> dict:

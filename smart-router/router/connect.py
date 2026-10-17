@@ -194,14 +194,14 @@ def _provider_reason(e: Exception) -> str:
     """The provider's own words, without ever echoing the key."""
     resp = getattr(e, "response", None)
     if resp is None:
-        return f"{type(e).__name__}: {str(e)[:160]}" if str(e) else type(e).__name__
+        return f"{type(e).__name__}: {secrets.redact(str(e))[:160]}" if str(e) else type(e).__name__
     try:
         d = resp.json()
         err = d.get("error", d)
         msg = err.get("message") if isinstance(err, dict) else str(err)
     except Exception:
         msg = (resp.text or "")[:200]
-    return f"HTTP {resp.status_code}: {str(msg)[:200]}"
+    return f"HTTP {resp.status_code}: {secrets.redact(msg)[:200]}"
 
 
 @api.post("/connect/key")

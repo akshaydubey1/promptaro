@@ -74,7 +74,7 @@ WORKER_NOTE = ("You are running inside Promptaro on an isolated git branch of th
 def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
     for env_var in (env_vars if isinstance(env_vars, tuple) else (env_vars,)):
         override = os.environ.get(env_var)
-        if override:
+        if override:                                       # an explicit override wins, or disables
             return override if Path(override).exists() else None
     for c in (shutil.which(name), *extra):
         if c and Path(c).exists() and os.access(c, os.X_OK):
@@ -95,10 +95,15 @@ def find_codex() -> str | None:
 
 
 def _worker_env() -> dict:
-    """Make the tool use your plan sign-in, not an API key that may be in the environment."""
-    env = dict(os.environ)
+    """Make the tool use your plan sign-in, not API keys or a gateway URL in the environment.
+    Base-URL overrides (exported by promptaro-env / eval) would silently proxy the tool's
+    subscription through the per-use gateway; anything that smells like a secret is dropped too."""
+    from .tools import _NAME_DROP, _URL_CRED
+    env = {k: v for k, v in os.environ.items() if not _NAME_DROP.search(k) and not _URL_CRED.search(v)}
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
-              "GEMINI_API_KEY"):
+              "GEMINI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+              "OPENAI_BASE_URL", "OPENAI_API_BASE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+              "ROUTER_GATEWAY_TOKEN"):
         env.pop(k, None)
     env.update({"CI": "1", "NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"})
     return env
@@ -238,10 +243,15 @@ class _CliRun:
                                   "explain": {"level": "hard", "because": "hard agent work runs on a plan you "
                                               "already pay for, so it adds no per-use cost.",
                                               "subscription": True}})
-        proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=s["worktree"],
-                                                    env=_worker_env(), stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
-                                                    limit=16 * 1024 * 1024)
+        try:
+            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=s["worktree"],
+                                                        env=_worker_env(), stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
+                                                        limit=16 * 1024 * 1024)
+        except Exception as e:
+            store.emit(sid, "note", {"text": f"{LABEL[self.engine]} couldn't start "
+                                             f"({type(e).__name__}). Trying the next option."})
+            return False
         # Drain stderr concurrently — a full stderr pipe would deadlock the run.
         err_task = asyncio.create_task(proc.stderr.read())
         try:
@@ -257,8 +267,14 @@ class _CliRun:
         except asyncio.CancelledError:
             proc.terminate()
             raise
+        except Exception as e:                                # spawn/stream failure: try the next option
+            store.emit(sid, "note", {"text": f"{LABEL[self.engine]} stopped unexpectedly "
+                                             f"({type(e).__name__}). Trying the next option."})
+            return False
         finally:
             store.update(sid, state=st)
+            if not err_task.done():
+                err_task.cancel()
 
         ok, summary, usage = self.outcome()
         err = ""

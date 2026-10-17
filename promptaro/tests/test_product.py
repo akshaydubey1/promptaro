@@ -43,7 +43,7 @@ def _run(desk, repo, task, model=""):
 
 @pytest.mark.parametrize("mode,sub", [("chatgpt", True), ("api", False), ("none", False)])
 def test_detects_chatgpt_plan(codex, monkeypatch, mode, sub):
-    monkeypatch.setenv("FAKE_CODEX_AUTH", mode)
+    monkeypatch.setenv("FAKE_CODEX_MODE", mode)
     st = asyncio.run(workers.codex_status(force=True))
     assert st["installed"] and st["subscription"] is sub
 

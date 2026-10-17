@@ -22,8 +22,6 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent          # the promptaro folder
 
-NEW = {"tw-claude": "promptaro-claude", "tw-aider": "promptaro-aider", "tw-env": "promptaro-env"}
-
 _POSIX_HEAD = """#!/bin/bash
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
 # Promptaro launcher ({what}) — Author: Akshay Dubey. Created by Promptaro; safe to delete.
@@ -65,6 +63,11 @@ WINDOWS = {
                             "set ANTHROPIC_API_KEY=\r\nclaude %*\r\n"),
     "promptaro-aider.cmd": ("aider --openai-api-base http://127.0.0.1:{port}/v1 --openai-api-key %PRO_TOKEN% "
                            "--model openai/promptaro-auto %*\r\n"),
+    "promptaro-env.cmd": ("echo set ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\r\n"
+                          "echo set ANTHROPIC_AUTH_TOKEN=%PRO_TOKEN%\r\n"
+                          "echo set OPENAI_BASE_URL=http://127.0.0.1:{port}/v1\r\n"
+                          "echo set OPENAI_API_BASE=http://127.0.0.1:{port}/v1\r\n"
+                          "echo set OPENAI_API_KEY=%PRO_TOKEN%\r\n"),
 }
 
 # Legacy names forward to the new ones (POSIX exec; Windows call).
@@ -75,7 +78,9 @@ LEGACY_WINDOWS = {"tw-claude.cmd": "promptaro-claude.cmd", "tw-aider.cmd": "prom
 
 def bin_dir() -> Path:
     if platform.system() == "Windows":
-        return Path.home() / ".promptaro" / "bin"
+        home = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("TILLWRIGHT_HOME")
+                    or Path.home() / ".promptaro")
+        return home / "bin"
     return Path.home() / ".local" / "bin"
 
 

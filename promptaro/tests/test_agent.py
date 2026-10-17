@@ -75,6 +75,28 @@ def test_command_policy_vets_paths_inside_workspace(tmp_path):
     assert needs_approval("rm -fr /", "ask_risky", ws) is None
 
 
+def test_never_ask_still_blocks_exfiltration_and_wreckage(tmp_path):
+    """never_ask skips the prompt, not the analysis: exfil, escape and destructive
+    constructs are refused even when no human is in the loop."""
+    ws = tmp_path
+    for cmd in ("cat ~/.ssh/id_rsa", "grep -r secret /etc", "find / -name x",
+                "find / -name '*.key' -delete", "rm -rf ..", 'rm -rf "$HOME"', 'rm -rf "${HOME}"',
+                "git push origin main", "tee /etc/passwd", "cp a /etc/b", "dd if=x of=/dev/disk0"):
+        assert needs_approval(cmd, "never_ask", ws) is None, cmd
+    # Command substitution is vetted recursively, not blind-run.
+    assert needs_approval("echo $(find ~ -delete)", "never_ask", ws) is None
+    assert needs_approval("echo $(cat ~/.ssh/id_rsa)", "never_ask", ws) is None
+    assert needs_approval("echo $(pwd)", "never_ask", ws) is False
+    # Redirection: only safe /dev sinks pass; real devices and outside paths are refused.
+    assert needs_approval("echo hi > /dev/disk0", "never_ask", ws) is None
+    assert needs_approval("echo hi > /dev/null", "never_ask", ws) is False
+    assert needs_approval("make build &> build.log", "never_ask", ws) is False
+    assert needs_approval("make build &> /tmp/x", "never_ask", ws) is None
+    # Ordinary work still runs without asking.
+    assert needs_approval("rm -f calc.py", "never_ask", ws) is False
+    assert needs_approval("make test", "never_ask", ws) is False
+
+
 def test_secrets_stripped_from_commands(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-secret")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp")

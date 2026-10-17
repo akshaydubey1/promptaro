@@ -109,3 +109,29 @@ def test_promptaro_launchers_plus_legacy_shims(client, monkeypatch, tmp_path):
     files = {Path(f).name for f in client.post("/api/gateway/launchers", headers=H).json()["files"]}
     assert {"promptaro-claude", "promptaro-aider", "promptaro-env"} <= files
     assert {"tw-claude", "tw-aider", "tw-env"} <= files          # compat shims installed too
+
+
+def test_single_legacy_env_targets_that_home(legacy, monkeypatch):
+    """Only TILLWRIGHT_HOME set: the resolved home IS that dir, so desk data migrates there
+    rather than splitting between ~/.promptaro and the env dir."""
+    tw, ak, new = legacy
+    monkeypatch.delenv("PROMPTARO_HOME", raising=False)
+    monkeypatch.setenv("TILLWRIGHT_HOME", str(new))
+    (ak / "ledger.json").write_text("{}")
+    (tw / "desk.db").write_text("")
+    assert migrate.home() == new
+    assert (new / "ledger.json").exists() and (new / "desk.db").exists()
+
+
+def test_keychain_present_but_empty_falls_through_to_file(tmp_path, monkeypatch):
+    """A Tillwright-era file-backend user on a machine where keyring now works still finds keys."""
+    class EmptyKR:
+        @staticmethod
+        def get_password(service, name): return None
+    monkeypatch.setattr(secrets, "_kr_ok", True)
+    monkeypatch.setattr(secrets, "keyring", EmptyKR)
+    f = tmp_path / "credentials.json"
+    f.write_text('{"ANTHROPIC_API_KEY": "sk-file"}')
+    monkeypatch.setattr(secrets, "_FALLBACK", f)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert secrets.get("ANTHROPIC_API_KEY") == "sk-file"

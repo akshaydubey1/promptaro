@@ -260,7 +260,7 @@ class AgentRun:
                     break
             t0 = time.perf_counter()
             try:
-                comp = await r.providers[spec.provider].complete(spec, self.state["system"], "", 6000,
+                comp = await r.providers[spec.provider].complete(spec, self.state.get("system", ""), "", 6000,
                                                                  messages=self.messages)
                 r.registry.breaker.record(spec.id, True)
                 errors = 0

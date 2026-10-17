@@ -48,7 +48,7 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=[h.strip() for h in _hos
 
 # These paths authenticate themselves (gateway bearer token) or must be reachable
 # from a plain browser redirect (OAuth start/callback).
-_SELF_AUTH = ("/v1/messages", "/v1/chat/completions", "/v1/models", "/v1/completions")
+_SELF_AUTH = ("/v1/messages", "/v1/chat/completions", "/v1/models")
 _OPEN_GET = ("/", "/healthz", "/connect/openrouter/start", "/connect/openrouter/callback")
 
 

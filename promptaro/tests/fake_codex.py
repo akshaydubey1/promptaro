@@ -5,7 +5,7 @@ import json, os, sys
 from pathlib import Path
 a = sys.argv[1:]
 if a[:2] == ["login", "status"]:
-    mode = os.environ.get("FAKE_CODEX_AUTH", "chatgpt")
+    mode = os.environ.get("FAKE_CODEX_MODE", "chatgpt")
     if mode == "none":
         print("Not logged in", file=sys.stderr); sys.exit(1)
     print("Logged in using ChatGPT" if mode == "chatgpt" else "Logged in using an API key - sk-***", file=sys.stderr)

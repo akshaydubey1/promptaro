@@ -153,8 +153,9 @@ def pick_models(p: FreeProvider, ids: list[str]) -> list[tuple[str, ModelRule]]:
     for rule in p.rules:
         hits = sorted((i for i in ids if re.search(rule.pattern, i, re.I)), reverse=True)   # newest-looking first
         hits = [h for h in hits if not re.search(r"(guard|safety|embed|whisper|tts|orpheus|vision-only)", h, re.I)]
-        if hits and hits[0] not in {m for m, _ in out}:
-            out.append((hits[0], rule))
+        hit = next((h for h in hits if h not in {m for m, _ in out}), None)
+        if hit:
+            out.append((hit, rule))
         if len(out) >= p.max_models:
             break
     return out

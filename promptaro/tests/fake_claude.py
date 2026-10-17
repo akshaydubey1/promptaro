@@ -5,7 +5,7 @@ import json, os, sys
 from pathlib import Path
 a = sys.argv[1:]
 if a[:2] == ["auth", "status"]:
-    mode = os.environ.get("FAKE_CLAUDE_AUTH", "sub")
+    mode = os.environ.get("FAKE_CLAUDE_MODE", "sub")
     print(json.dumps({"loggedIn": mode != "none", "authMethod": "api_key" if mode == "api" else "oauth_token",
                       "apiProvider": "firstParty"}))
     sys.exit(0)
