@@ -33,7 +33,7 @@ if ! curl -fsS "$URL/healthz" >/dev/null 2>&1; then
   for i in $(seq 1 120); do curl -fsS "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 fi
 RESP=$(curl -sS -X POST -H "x-promptaro: 1" "$URL/api/gateway/token" 2>/dev/null)
-TOKEN=$(printf '%s' "$RESP" | sed -E 's/.*"token":"([^"]+)".*/\\1/')
+TOKEN=$(printf '%s' "$RESP" | sed -nE 's/.*"token":"([^"]+)".*/\\1/p')
 if [ -z "$TOKEN" ]; then
   case "$RESP" in
     *terms_required*) echo "Open Promptaro and accept the Terms of Use first." >&2 ;;
