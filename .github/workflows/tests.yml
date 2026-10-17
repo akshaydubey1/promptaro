@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # diff --check needs the base commit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pinned dependencies
+        run: python -m pip install -r smart-router/requirements.txt -r promptaro/requirements.txt
+
+      - name: Guardrails — leaks, auth, fail-closed defaults
+        run: python -m pytest smart-router/tests/test_guardrails.py promptaro/tests/test_guardrails.py -q
+
+      - name: Smart Router suite
+        run: python -m pytest tests -q
+        working-directory: smart-router
+
+      - name: Promptaro app suite
+        run: python -m pytest promptaro/tests -q
+
+      - name: Whitespace / conflict-marker check
+        if: github.event_name == 'pull_request'
+        run: git diff --check origin/${{ github.base_ref }}...HEAD

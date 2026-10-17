@@ -86,15 +86,17 @@ def _inside_root(target: str, root: Path | None) -> bool | None:
 
 
 def _paths_outside(part: str, root: Path | None) -> bool:
-    """A read/write command (cat, grep, cp, tee, ...) pointing at paths outside the workspace."""
-    if root is None or not (_READ_ANYWHERE.match(part) or _WRITE_ANYWHERE.match(part)):
+    """A read/write command (cat, grep, cp, tee, ...) pointing at paths outside the workspace.
+    With no workspace to vet against, any path-shaped argument is treated as
+    outside — a caller that can't prove containment doesn't get to pass."""
+    if not (_READ_ANYWHERE.match(part) or _WRITE_ANYWHERE.match(part)):
         return False
     for tok in part.split()[1:]:
         if tok.startswith("-") or tok == "--":
             continue
         if "/" not in tok and "~" not in tok and "$" not in tok:
             continue
-        if _inside_root(tok, root) is False:
+        if _inside_root(tok, root) is not True:
             return True
     return False
 
@@ -160,6 +162,14 @@ def _clean_env() -> dict:
     env = {k: v for k, v in env.items() if not k.startswith("GIT_CONFIG_")}
     for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+        env.pop(k, None)
+    # Subscription/provider overrides: an exported promptaro-env or eval session would
+    # silently reroute spawned commands (and the CLIs they run) through the gateway or
+    # a different model. Name-matched keys/tokens are already gone; these aren't shaped
+    # like secrets, so drop them by name.
+    for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+              "OPENAI_BASE_URL", "OPENAI_API_BASE", "CODEX_BASE_URL", "GEMINI_BASE_URL",
+              "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ROUTER_GATEWAY_TOKEN"):
         env.pop(k, None)
     return env
 

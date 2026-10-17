@@ -97,9 +97,11 @@ def find_codex() -> str | None:
 def _worker_env() -> dict:
     """Make the tool use your plan sign-in, not API keys or a gateway URL in the environment.
     Base-URL overrides (exported by promptaro-env / eval) would silently proxy the tool's
-    subscription through the per-use gateway; anything that smells like a secret is dropped too."""
-    from .tools import _NAME_DROP, _URL_CRED
-    env = {k: v for k, v in os.environ.items() if not _NAME_DROP.search(k) and not _URL_CRED.search(v)}
+    subscription through the per-use gateway; anything that smells like a secret is dropped too.
+    Starts from _clean_env so git's CI/config and repo-pointer vars can't corrupt the CLIs'
+    own git calls either."""
+    from .tools import _clean_env
+    env = _clean_env()
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
               "GEMINI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
               "OPENAI_BASE_URL", "OPENAI_API_BASE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
