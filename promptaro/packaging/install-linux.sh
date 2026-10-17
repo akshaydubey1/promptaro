@@ -20,4 +20,5 @@ Categories=Development;Utility;
 DESK
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" || true
 rm -f "$APPS/tillwright.desktop"   # remove the old entry if it exists
-echo "Promptaro is now in your app menu."
+echo "Promptaro is now in your app menu — starting it…"
+nohup "$SRC/launch.sh" --background >/dev/null 2>&1 &
