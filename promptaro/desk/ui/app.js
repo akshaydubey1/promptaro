@@ -44,13 +44,17 @@ document.addEventListener("click", (e) => {
 });
 
 /* ---------------- sidebar ---------------- */
-async function loadSessions() { S.sessions = await api("/api/sessions"); renderSide(); }
+async function loadSessions() {
+  [S.sessions, S.projNames] = await Promise.all([api("/api/sessions"), api("/api/project-names")]);
+  renderSide();
+}
 const projBase = (p) => (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
+const projName = (p) => (S.projNames || {})[p] || projBase(p);
 function collapsedProjs() {
   try { return new Set(JSON.parse(localStorage.getItem("promptaro:projCollapsed") || "[]")); } catch { return new Set(); }
 }
 function renderSide() {
-  const row = (s, inProj) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${!inProj && s.project ? `<span class="sub"> · ${esc(projBase(s.project))}</span>` : ""}${inProj && s.kind === "agent" ? `<span class="sub tag">agent</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
+  const row = (s, inProj) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${!inProj && s.project ? `<span class="sub"> · ${esc(projName(s.project))}</span>` : ""}${inProj && s.kind === "agent" ? `<span class="sub tag">agent</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x ren" data-ren="${s.id}" title="Rename" aria-label="Rename conversation">✏</button><button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
   const unbound = S.sessions.filter((s) => !s.project);
   const projects = new Map();                                  // path -> sessions, first-seen order
   for (const s of S.sessions) if (s.project) (projects.get(s.project) || projects.set(s.project, []).get(s.project)).push(s);
@@ -60,7 +64,7 @@ function renderSide() {
     html += `<div class="group"><h3>Projects</h3>`;
     for (const [p, items] of projects) {
       const shut = collapsed.has(p);
-      html += `<div class="proj"><h4 class="proj-head" data-proj="${esc(p)}" title="${esc(p)}"><span class="chev${shut ? " shut" : ""}">▾</span>📁 ${esc(projBase(p))}<span class="count">${items.length}</span><button class="x add" data-add-chat="${esc(p)}" title="New chat in ${esc(projBase(p))}" aria-label="New chat in this project">＋</button></h4><ul${shut ? ' class="hidden"' : ""}>${items.map((s) => row(s, true)).join("")}</ul></div>`;
+      html += `<div class="proj"><h4 class="proj-head" data-proj="${esc(p)}" title="${esc(p)}"><span class="chev${shut ? " shut" : ""}">▾</span>📁 ${esc(projName(p))}<span class="count">${items.length}</span><button class="x ren" data-ren-proj="${esc(p)}" title="Rename project" aria-label="Rename project">✏</button><button class="x add" data-add-chat="${esc(p)}" title="New chat in ${esc(projName(p))}" aria-label="New chat in this project">＋</button></h4><ul${shut ? ' class="hidden"' : ""}>${items.map((s) => row(s, true)).join("")}</ul></div>`;
     }
     html += `</div>`;
   }
@@ -73,6 +77,24 @@ $("side").addEventListener("click", async (e) => {
     const s = S.sessions.find((x) => x.id === del.dataset.del);
     if (!confirm(s?.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
     try { await deleteSession(del.dataset.del); } catch (err) { toast(err.message); }
+    return;
+  }
+  const renProj = e.target.closest("[data-ren-proj]");
+  if (renProj) {
+    const p = renProj.dataset.renProj;
+    const name = prompt("Project name", projName(p));
+    if (name !== null) {
+      try { await api("/api/projects/rename", { method: "POST", body: { path: p, name } }); await loadSessions(); if (S.session) renderTop(); } catch (err) { toast(err.message); }
+    }
+    return;
+  }
+  const ren = e.target.closest("[data-ren]");
+  if (ren) {
+    const s = S.sessions.find((x) => x.id === ren.dataset.ren);
+    const title = prompt(s?.kind === "agent" ? "Rename this agent task" : "Rename this chat", s?.title || "");
+    if (title !== null && title.trim()) {
+      try { await api(`/api/sessions/${ren.dataset.ren}`, { method: "PATCH", body: { title: title.trim() } }); await loadSessions(); if (S.current === ren.dataset.ren) openSession(S.current); } catch (err) { toast(err.message); }
+    }
     return;
   }
   const add = e.target.closest("[data-add-chat]");
@@ -395,7 +417,7 @@ async function openSession(sid) {
 function renderTop() {
   const s = S.session; if (!s) { $("topTools").innerHTML = ""; return; }
   $("topTools").innerHTML = (s.kind === "agent" ? `<span>${esc(statusText(s.status))}</span><button class="btn" data-top="review">Changes</button>` : "") +
-    (s.project ? `<span title="${esc(s.project)}">📁 ${esc(s.project.split(/[\\/]/).filter(Boolean).pop() || "")}</span>` : "") +
+    (s.project ? `<span title="${esc(s.project)}">📁 ${esc(projName(s.project))}</span>` : "") +
     ((s.tokens_in || s.tokens_out) ? `<span title="Tokens used in this conversation (in · out)">${fmtTokens((s.tokens_in || 0) + (s.tokens_out || 0))} tokens</span>` : "") +
     (s.cost ? `<span title="Total spent in this conversation">$${(+s.cost).toFixed(4)}</span>` : (s.tokens_in ? `<span>$0</span>` : "")) +
     `<button class="btn ghost icon" data-top="export" title="Download this conversation as Markdown" aria-label="Download conversation">⤓</button>` +

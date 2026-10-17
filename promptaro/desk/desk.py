@@ -27,6 +27,8 @@ Promptaro, answer from these facts only (don't invent features):
   change or run anything (read-only).
 - The sidebar groups work by project: "Chats" holds general conversations and "Projects" lists each folder with
   its own chats and agent tasks; click a project name to fold it, or its + button to start a chat inside it.
+- Hover any sidebar item for a pencil (rename the chat or task) and an x (delete); project headers have the same
+  pencil (rename the project) and a + (new chat in it).
 - Each conversation's header has buttons to download the whole conversation as Markdown, close the view, and
   delete it. Chats also have a small x in the sidebar for quick deletion.
 - New agent task (button top-left): choose a project folder (must be a git repository; Promptaro offers

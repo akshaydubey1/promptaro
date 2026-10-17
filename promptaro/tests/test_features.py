@@ -218,3 +218,21 @@ def test_custom_endpoint_unreachable_without_models(client, monkeypatch):
 def test_custom_endpoint_bad_url(client):
     assert client.post("/connect/endpoints", headers=H,
                        json={"label": "x", "base_url": "localhost:1234"}).status_code == 400
+
+
+# --------------------------------------------------------------- renaming
+def test_rename_chat(client):
+    sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
+    r = client.patch(f"/api/sessions/{sid}", json={"title": "My research"}, headers=H)
+    assert r.status_code == 200
+    s = [x for x in client.get("/api/sessions").json() if x["id"] == sid][0]
+    assert s["title"] == "My research"
+
+
+def test_rename_project(client, repo):
+    assert client.post("/api/projects/rename", json={"path": str(repo), "name": "x"}).status_code == 403
+    r = client.post("/api/projects/rename", json={"path": str(repo), "name": "Calc"}, headers=H)
+    assert r.status_code == 200
+    assert client.get("/api/project-names").json() == {str(repo): "Calc"}
+    client.post("/api/projects/rename", json={"path": str(repo), "name": ""}, headers=H)
+    assert client.get("/api/project-names").json() == {}          # empty name restores the folder name

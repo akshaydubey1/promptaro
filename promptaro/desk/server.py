@@ -589,6 +589,31 @@ async def projects():
     return out[:12]
 
 
+@app.get("/api/project-names")
+async def project_names():
+    """Display names the user gave project folders ({path: name}); groups still key on the real path."""
+    from router.catalog import get_settings
+    return get_settings().get("project_names") or {}
+
+
+class ProjName(BaseModel):
+    path: str
+    name: str = ""
+
+
+@app.post("/api/projects/rename")
+async def rename_project(b: ProjName):
+    """Name a project group in the sidebar; empty name returns to the folder's own name."""
+    from router.catalog import get_settings, set_settings
+    names = dict(get_settings().get("project_names") or {})
+    if b.name.strip():
+        names[b.path] = b.name.strip()[:60]
+    else:
+        names.pop(b.path, None)
+    set_settings(project_names=names)
+    return {"ok": True}
+
+
 @app.post("/api/pick-folder")
 async def pick_folder():
     """The system's own folder chooser (macOS, Windows, Linux with zenity/kdialog)."""
