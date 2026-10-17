@@ -177,7 +177,26 @@ def _clean_env() -> dict:
 _SECRET_TEXT = re.compile(
     r"(sk-or-v1-[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|"
     r"gsk_[A-Za-z0-9]{16,}|csk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{16,}|"
-    r"xox[bap]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+    r"xox[bap]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"
+    r"(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?(?:key|token)?|password|passwd)"
+    r"[\"']?\s*[:=]\s*[\"'][A-Za-z0-9_./+\-]{8,}[\"'])", re.I)
+
+# File/folder names that almost always hold credentials — the read tools refuse them
+# outright so a cloud model never sees their contents (even via a project chat on a
+# real folder). Templates like .env.example stay blocked too: the same names usually
+# carry real values in user folders.
+_SENSITIVE_NAME = re.compile(
+    r"^(\.env($|\..*)|\.ssh$|\.aws$|\.azure$|\.gnupg$|\.kube$|\.docker$|\.terraform$|"
+    r"\.netrc$|\.npmrc$|\.pypirc$|\.git-credentials$|\.gitconfig-credentials$|"
+    r"\.pgpass$|\.my?cnf$|config\.gcloud$|"
+    r"(id_rsa|id_dsa|id_ecdsa|id_ed25519|id_xmss)(\.pub)?$|"
+    r".*\.(pem|key|p12|pfx|jks|keystore|kubeconfig)$|"
+    r"credentials?\.(json|xml|ya?ml|ini|cfg|env)$|secrets?\.(json|ya?ml|env)$)$", re.I)
+
+
+def _sensitive(rel: Path) -> bool:
+    return any(_SENSITIVE_NAME.match(part) for part in rel.parts)
 
 
 def redact(text: str) -> str:
@@ -213,8 +232,11 @@ class Workspace:
         full = (self.root / p).resolve()
         if full != self.root and self.root not in full.parents:
             raise ToolError(f"'{p}' is outside the project folder")
-        if any(part.lower() == ".git" for part in full.relative_to(self.root).parts):
+        rel = full.relative_to(self.root)
+        if any(part.lower() == ".git" for part in rel.parts):
             raise ToolError("the .git folder is off limits")
+        if _sensitive(rel):
+            raise ToolError(f"'{p}' looks like it holds credentials — the model can't see it")
         return full
 
     def rel(self, p: Path) -> str:
@@ -230,6 +252,7 @@ class Workspace:
         out, _ = await proc.communicate()
         files = out.decode(errors="replace").splitlines() if proc.returncode == 0 else [
             str(p.relative_to(base)) for p in base.rglob("*") if p.is_file() and ".git" not in p.parts][:5000]
+        files = [f for f in files if not _sensitive(Path(f))]
         shown, dirs = [], set()
         for f in sorted(files):
             parts = f.split("/")
@@ -253,20 +276,25 @@ class Workspace:
         end = min(len(lines), int(end) if end else start + READ_LINES - 1)
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))
         more = f"\n[lines {end + 1}-{len(lines)} not shown]" if end < len(lines) else ""
-        return ToolResult(True, clip(body + more), {"lines": len(lines), "start": start, "end": end})
+        return ToolResult(True, clip(redact(body + more)),
+                          {"lines": len(lines), "start": start, "end": end})
 
     async def search(self, pattern: str, path: str = ".") -> ToolResult:
         base = self.path(path)
         if shutil.which("rg"):
-            args = ["rg", "-n", "--no-heading", "--max-count", "50", "-e", pattern, str(base)]
+            args = ["rg", "-n", "--no-heading", "--max-count", "50",
+                    "-g", "!.env*", "-g", "!*.pem", "-g", "!*.key", "-g", "!id_*",
+                    "-g", "!.ssh", "-g", "!.aws", "-e", pattern, str(base)]
         else:
             args = ["git", "grep", "-n", "-I", "-E", pattern, "--", str(base)]
         proc = await asyncio.create_subprocess_exec(*args, cwd=self.root, stdout=asyncio.subprocess.PIPE,
                                                     stderr=asyncio.subprocess.STDOUT)
         out, _ = await proc.communicate()
         text = out.decode(errors="replace").replace(str(self.root) + "/", "")
-        lines = text.splitlines()[:200]
-        return ToolResult(True, clip("\n".join(lines) or "(no matches)"), {"matches": len(lines)})
+        lines = [ln for ln in text.splitlines()
+                 if not _sensitive(Path(ln.split(":", 1)[0].strip()))][:200]
+        return ToolResult(True, clip(redact("\n".join(lines)) or "(no matches)"),
+                          {"matches": len(lines)})
 
     # ------------------------------------------------------------ write
     async def write_file(self, path: str, content: str) -> ToolResult:

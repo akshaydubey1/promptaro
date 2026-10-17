@@ -894,10 +894,13 @@ async function openStudio() {
   try {
     S.toolCaps = await api("/api/tools/capabilities");
     const c = S.toolCaps.convert, media = S.toolCaps.media || [];
-    const connected = media.filter((m) => m.connected).map((m) => m.label);
-    const video = media.some((m) => m.connected && m.kinds.includes("video"));
+    const usable = media.filter((m) => m.connected && m.enabled !== false);
+    const gated = media.filter((m) => m.connected && m.enabled === false).map((m) => m.label);
+    const video = usable.some((m) => m.kinds.includes("video"));
+    $("genPaid").checked = !!S.toolCaps.paid_media;
     $("studioCaps").textContent =
-      `Images: ${connected.length ? connected.join(", ") : "no keys yet — Pollinations works without one"}. ` +
+      `Images: ${usable.length ? usable.map((m) => m.label).join(", ") : "no keys yet — Pollinations works without one"}` +
+      `${gated.length ? ` (off until allowed: ${gated.join(", ")})` : ""}. ` +
       `Video: ${video ? "Hugging Face (free)" : "needs a free Hugging Face token (Connections → Image & video keys)"}. ` +
       `Convert: ${c.ffmpeg ? "audio+video ✓" : "audio/video needs ffmpeg"}${c.pandoc ? ", pandoc ✓" : ""}.`;
   } catch { $("studioCaps").textContent = ""; }
@@ -931,6 +934,10 @@ $("genGo").onclick = async () => {
     $("genStatus").textContent = "";
   } catch (e) { $("genStatus").textContent = ""; $("genResult").innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
   finally { b.disabled = false; b.textContent = "Generate"; }
+};
+$("genPaid").onchange = async (e) => {
+  try { await api("/connect/settings", { method: "POST", body: { paid_media: e.target.checked } }); }
+  catch (x) { e.target.checked = !e.target.checked; toast(x.message); }
 };
 $("convGo").onclick = async () => {
   const inputs = convInputPaths();

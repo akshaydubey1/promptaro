@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -224,6 +225,21 @@ def set_settings(**kw) -> dict:
 
 
 # ------------------------------------------------- custom OpenAI-compatible endpoints
+def endpoint_host(base: str) -> str:
+    return (urllib.parse.urlsplit(base).hostname or "").lower()
+
+
+def is_loopback(host: str) -> bool:
+    return host in ("localhost", "::1", "0.0.0.0") or host.startswith("127.")
+
+
+def is_local_net(host: str) -> bool:
+    """Loopback or a private network address — treated as private and free."""
+    return is_loopback(host) or host.endswith((".local", ".internal", ".lan")) \
+        or host.startswith(("192.168.", "10.", "169.254.")) \
+        or any(host.startswith(f"172.{i}.") for i in range(16, 32))
+
+
 def custom_endpoints() -> list[dict]:
     """User-added endpoints (Ollama, LM Studio, vLLM, a company proxy) from settings.json."""
     return [dict(e) for e in get_settings().get("custom_endpoints") or []]
@@ -265,12 +281,15 @@ def custom_specs() -> list[dict]:
     for ep in custom_endpoints():
         ids = _read_cache(f"custom_{ep['id']}.json", 10 ** 9) or ep.get("models") or []
         tier = int(ep.get("tier", 2)) if int(ep.get("tier", 2)) in (1, 2, 3) else 2
+        # Only truly local endpoints count as free — a remote endpoint may bill
+        # per request, so it counts as paid and respects the spending controls.
+        local = bool(ep.get("local")) or is_local_net(endpoint_host(ep.get("base_url", "")))
         for m in ids[:8]:
             specs.append({
                 "id": f"{ep['id']}/{m}", "name": f"{m} ({ep['label']})",
                 "provider": "openai_compatible", "model": m,
                 "api_key_env": ep.get("key_env", ""), "base_url": ep["base_url"],
-                "via": ep["label"], "free": True, "trains": bool(ep.get("trains", True)),
+                "via": ep["label"], "free": local, "trains": bool(ep.get("trains", True)),
                 "vendor": "custom", "tier": tier, "context_window": int(ep.get("context", 32000)),
                 "capabilities": ["json"], "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": 1500,
                 "prior": {k: v - 0.08 for k, v in TIER_PRIOR[tier].items()}})

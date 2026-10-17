@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -172,10 +173,14 @@ class NewChat(BaseModel):
 async def new_chat(b: NewChat):
     fields = {"prefer": b.prefer, "model": b.model}
     if b.project.strip():
-        root = Path(b.project.strip()).expanduser()
+        root = Path(b.project.strip()).expanduser().resolve()
         if not root.is_dir():
             raise HTTPException(400, "That folder doesn't exist. Choose a real project folder.")
-        fields["project"] = str(root.resolve())
+        home = Path.home().resolve()
+        if root == home or root in home.parents:
+            raise HTTPException(400, "Pick a project folder, not your home folder or a whole "
+                                     "drive — a project chat can read everything inside it.")
+        fields["project"] = str(root)
     return desk.store.create("chat", b.title, **fields)
 
 
@@ -627,8 +632,9 @@ def _tools_out() -> Path:
 async def tools_capabilities():
     """What the Studio can do right now: converters present, media providers connected."""
     from . import convert
-    from router import media
-    return {"convert": convert.capabilities(), "media": media.status()}
+    from router import catalog, media
+    return {"convert": convert.capabilities(), "media": media.status(),
+            "paid_media": bool(catalog.get_settings().get("paid_media"))}
 
 
 class GenBody(BaseModel):
@@ -653,7 +659,7 @@ async def tool_generate(b: GenBody):
         raise HTTPException(400, secrets.redact(str(e))[:400])
     name = f"{b.kind}-{pysecrets.token_hex(4)}.{_MIME_EXT.get(mime, 'png' if b.kind == 'image' else 'mp4')}"
     (_tools_out() / name).write_bytes(data)
-    return {"file": name, "url": f"/api/tools/output/{name}", "provider": provider,
+    return {"file": name, "url": f"/api/tools/output/{urllib.parse.quote(name)}", "provider": provider,
             "bytes": len(data)}
 
 
@@ -697,11 +703,13 @@ async def tool_convert(b: ConvertBody):
         out_dir = _tools_out()
         if b.action == "make-pdf":
             slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or inputs[0].stem).strip())[:60] or "document"
-            out = await asyncio.to_thread(convert.make_pdf, inputs, out_dir / f"{slug}.pdf")
+            out = await asyncio.to_thread(convert.make_pdf, inputs,
+                                          convert.unique_path(out_dir / f"{slug}.pdf"))
             results = [out]
         elif b.action == "merge-pdf":
             slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or "combined").strip())[:60] or "combined"
-            out = await asyncio.to_thread(convert.merge_pdfs, inputs, out_dir / f"{slug}.pdf")
+            out = await asyncio.to_thread(convert.merge_pdfs, inputs,
+                                          convert.unique_path(out_dir / f"{slug}.pdf"))
             results = [out]
         else:
             fmt = re.sub(r"[^a-z0-9]", "", b.format.lower())
@@ -712,11 +720,12 @@ async def tool_convert(b: ConvertBody):
         raise
     except Exception as e:
         raise HTTPException(400, secrets.redact(str(e))[:300])
-    return {"outputs": [{"name": p.name, "url": f"/api/tools/output/{p.name}",
+    return {"outputs": [{"name": p.name, "url": f"/api/tools/output/{urllib.parse.quote(p.name)}",
                          "bytes": p.stat().st_size} for p in results]}
 
 
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+# Output filenames may have spaces, unicode and brackets — anything except path separators.
+_SAFE_NAME = re.compile(r"^[^/\\]{1,200}$")
 
 
 @app.get("/api/tools/output/{name}")

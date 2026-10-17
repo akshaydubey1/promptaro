@@ -24,7 +24,8 @@ Promptaro, answer from these facts only (don't invent features):
 - New chat: ask anything; each answer shows the model used and its cost. The Model menu picks a specific model or
   Auto; Priority picks Balanced / Lowest cost / Fastest / Best quality.
 - New project chat: a chat bound to a folder; the model reads that project's files to answer but can never
-  change or run anything (read-only).
+  change or run anything (read-only). A project must be a real subfolder — the home folder and whole drives are
+  refused, and files that hold credentials (.env, .ssh, keys) are never shown to the model.
 - The sidebar groups work by project: "Chats" holds general conversations and "Projects" lists each folder with
   its own chats and agent tasks; click a project name to fold it, or its + button to start a chat inside it.
 - Hover any sidebar item for a pencil (rename the chat or task) and an x (delete); project headers have the same
@@ -43,9 +44,11 @@ Promptaro, answer from these facts only (don't invent features):
   NVIDIA NIM, Mistral, Codestral, Cohere) each take one free key;
   Promptaro tracks each one's limits and shows what's left today. Providers that may train on prompts are only used
   for chats unless the user allows them for code. A daily $ budget caps all paid spend.
-- Studio (sidebar): generates images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI,
-  Cloudflare Workers AI, and Pollinations which needs no key — best-first, and converts files locally: make or
+- Studio (sidebar): generates images and short videos on free tiers — Hugging Face, Together AI, Cloudflare
+  Workers AI, and Pollinations which needs no key — best-first, and converts files locally: make or
   combine PDFs, convert images/audio/video/documents between formats. Nothing is uploaded anywhere.
+  Google AI Studio image models may bill a key once free quota runs out, so they only run when the user turns
+  on "Allow paid image models" in Studio.
 - Coding tools (sidebar): run Claude Code, Aider, Cline, Continue or OpenCode on these models through Promptaro's
   local gateway. `promptaro-claude` starts Claude Code through it; `promptaro-aider` starts Aider;
   `eval "$(promptaro-env)"` sets the variables for any other tool (the old `tw-*` commands still work).
@@ -53,8 +56,8 @@ Promptaro, answer from these facts only (don't invent features):
 - Hard agent tasks run automatically on the user's Claude subscription (through Claude Code) or ChatGPT
   subscription (through Codex CLI) when that tool is installed and signed in — no per-use charge; the plan's usage
   limits apply, and when one plan hits its limit the other plan or the regular models take over. The Model menu
-  can also pick a specific model under a plan — latest-version aliases like Claude Opus/Sonnet/Haiku or pinned
-  versions like Claude Opus 5 or GPT-5.3 Codex. Easy chats use free
+  can also pick a specific model under a plan — Claude Opus/Sonnet/Haiku (latest aliases or pinned Opus 5 /
+  Sonnet 5) or Codex's GPT-5.x. A chat with a plan pick answers through that plan's tool, read-only. Easy chats use free
   models (OpenRouter allows 50 free requests a day, or 1000 after buying $10 of credit once); other work uses the
   cheapest paid model that can do it. Each answer shows the model, Free/Paid/Subscription, tokens used, and a
   "Why this model?" link with the options considered. Thumbs up/down teaches the router; thumbs down also offers
@@ -84,6 +87,11 @@ class Desk:
     # --------------------------------------------------------------- chat
     async def chat(self, sid: str, text: str, *, retry_of: int | None = None, exclude: tuple = ()) -> None:
         s = self.store.get(sid)
+        if engine_of(s.get("model") or "")[0]:           # a subscription pick: the plan's own tool answers
+            if await self._plan_chat(sid, text):
+                return
+            self.store.emit(sid, "note", {"text": "No signed-in plan could answer, so a regular "
+                                                  "model is answering instead."})
         if s.get("project"):                            # a chat bound to a folder: read-only tools ground it
             from .agent import ChatRun
             await ChatRun(self, sid).run(text)
@@ -152,6 +160,17 @@ class Desk:
             self.store.emit(sid, "error", {"text": redact(e)[:500]})
         finally:
             self.store.update(sid, status="idle")
+
+    async def _plan_chat(self, sid: str, text: str) -> bool:
+        """A chat picked a plan model: the official tool answers read-only. False -> router."""
+        from .workers import CHAT_RUNNERS, usable_engines
+        wanted, _ = engine_of(self.store.get(sid).get("model") or "")
+        plans = await usable_engines()
+        for eng in dict.fromkeys([wanted, *plans]):
+            if eng in plans and eng in CHAT_RUNNERS:
+                if await CHAT_RUNNERS[eng](self, sid).run(text):
+                    return True
+        return False
 
     # ----------------------------------------------------------- learning
     def feedback(self, sid: str, seq: int, good: bool) -> dict:

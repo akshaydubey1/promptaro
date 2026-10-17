@@ -14,16 +14,21 @@ import urllib.parse
 
 import httpx
 
-from . import secrets
+from . import catalog, secrets
 
 # (id, label, kinds, key env vars it needs — empty means no account required)
+# "paid": the provider may bill once free quotas run out — used only after the
+# user opts in (Studio > "allow paid image models"), matching the app's
+# free-only-until-you-say-otherwise promise.
 PROVIDERS = [
-    {"id": "gemini", "label": "Google AI Studio (free tier)", "kinds": {"image"}, "keys": ("GEMINI_API_KEY",)},
+    {"id": "gemini", "label": "Google AI Studio", "kinds": {"image"}, "keys": ("GEMINI_API_KEY",),
+     "paid": True},
     {"id": "huggingface", "label": "Hugging Face (free)", "kinds": {"image", "video"}, "keys": ("HF_TOKEN",)},
     {"id": "together", "label": "Together AI (free FLUX)", "kinds": {"image"}, "keys": ("TOGETHER_API_KEY",)},
     {"id": "cloudflare", "label": "Cloudflare Workers AI (free)",
      "kinds": {"image"}, "keys": ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID")},
-    {"id": "pollinations", "label": "Pollinations (always free)", "kinds": {"image"}, "keys": ()},
+    {"id": "pollinations", "label": "Pollinations (free, public — avoid private prompts)",
+     "kinds": {"image"}, "keys": ()},
 ]
 
 # Newest first; a quota/error on one falls through to the next.
@@ -35,8 +40,10 @@ _HF_VIDEO_MODELS = ("Lightricks/LTX-Video", "genmo/mochi-1-preview", "damo-vilab
 
 def status() -> list[dict]:
     """Per provider: what it can do and whether its keys are connected."""
+    paid_ok = bool(catalog.get_settings().get("paid_media"))
     return [{"id": p["id"], "label": p["label"], "kinds": sorted(p["kinds"]),
-             "connected": all(secrets.has(k) for k in p["keys"]), "free": True}
+             "connected": all(secrets.has(k) for k in p["keys"]), "free": not p.get("paid"),
+             "enabled": paid_ok or not p.get("paid")}
             for p in PROVIDERS]
 
 
@@ -57,8 +64,13 @@ def generate(kind: str, prompt: str, width: int = 1024, height: int = 1024) -> t
     if not prompt:
         raise RuntimeError("Describe what to generate first.")
     errs: list[str] = []
+    paid_ok = bool(catalog.get_settings().get("paid_media"))
     for p in PROVIDERS:
         if kind not in p["kinds"] or not all(secrets.has(k) for k in p["keys"]):
+            continue
+        if p.get("paid") and not paid_ok:
+            errs.append(f"{p['label']}: skipped — may bill your key once free quota runs out "
+                        "(enable “Allow paid image models” in Studio to use it)")
             continue
         try:
             fn = _GENERATORS[(p["id"], kind)]

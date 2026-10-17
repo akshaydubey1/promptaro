@@ -20,6 +20,7 @@ import re
 import hashlib
 import secrets as pysecrets
 import time
+import urllib.parse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -144,14 +145,16 @@ class SettingsBody(BaseModel):
     free_models: str | None = Field(None, pattern="^(off|chat|all)$")
     gateway_spend: str | None = Field(None, pattern="^(free|paid_ok)$")
     daily_budget_usd: float | None = Field(None, ge=0, le=10000)
+    paid_media: bool | None = None        # let Studio use image models that may bill a key
 
 
 @api.post("/connect/settings")
 async def save_settings(body: SettingsBody, request: Request):
     """free_models: off | chat (default) | all.  gateway_spend: free (default) | paid_ok.
-    daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap."""
+    daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap.
+    paid_media: opt in to image providers that can charge once free quotas run out."""
     d = catalog.set_settings(free_models=body.free_models, gateway_spend=body.gateway_spend,
-                             daily_budget_usd=body.daily_budget_usd)
+                             daily_budget_usd=body.daily_budget_usd, paid_media=body.paid_media)
     await asyncio.to_thread(_router(request).reload)
     return d
 
@@ -192,6 +195,12 @@ async def add_endpoint(body: EndpointBody, request: Request):
     base = body.base_url.strip().rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise HTTPException(400, "The address must start with http:// or https:// (usually it ends in /v1).")
+    host = catalog.endpoint_host(base)
+    if base.startswith("http://") and not catalog.is_loopback(host):
+        raise HTTPException(400, "A remote endpoint must use https:// — plain http would send "
+                                 "your prompts and key unencrypted. http:// is fine for localhost "
+                                 "(Ollama, LM Studio).")
+    local = catalog.is_local_net(host)
     eid = "ep-" + pysecrets.token_hex(4)
     key_env = ""
     if (body.key or "").strip():
@@ -212,7 +221,8 @@ async def add_endpoint(body: EndpointBody, request: Request):
             secrets.delete(key_env)
         raise HTTPException(400, "No models listed — type at least one model id.")
     ep = {"id": eid, "label": body.label.strip(), "base_url": base, "models": models,
-          "key_env": key_env, "trains": not body.private, "tier": body.tier}
+          "key_env": key_env, "trains": not body.private and not local, "tier": body.tier,
+          "local": local}
     catalog.note_endpoint_models(eid, found or models)
     catalog.save_endpoint(ep)
     await asyncio.to_thread(_router(request).reload)

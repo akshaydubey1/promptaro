@@ -36,27 +36,22 @@ REST_S = 3600             # how long a plan rests after hitting its usage limit
 ENGINES = ("claude_code", "codex")
 MODEL_IDS = {"claude-code": "claude_code", "codex": "codex"}      # Model menu id -> engine
 # Extra picks under each plan, e.g. "claude-code:opus" -> claude -p --model opus.
-# Aliases ("opus", "fable") always map to the newest version on the plan; pinned
-# names ("claude-opus-4") hold a specific generation. The set mirrors the model
-# catalog bundled with current Claude Code / Codex releases — an entry the plan
-# can't serve simply fails that run and the usual fallback picks up.
+# Aliases ("opus") follow the newest version the plan serves; pinned names hold a
+# generation. This list only contains ids verified against a live Claude Code
+# 2.1.267 install (Jul 2026): mythos/haiku-4/sonnet-3 ids are rejected by that
+# catalog and opus-4/sonnet-4 are retired. "best"/"fable" resolve to Fable 5.1,
+# which needs usage credits on plans that don't include it — the run then fails
+# cleanly and the usual fallback picks up. Codex has no aliases; ids track the
+# current generation, and an id a plan can't serve just falls back too.
 MODEL_CHOICES = {
     "claude_code": {
-        "best": "Claude — best available",
-        "fable": "Claude Fable (latest)",
-        "mythos": "Claude Mythos (latest)",
-        "opus": "Claude Opus (latest)",
         "sonnet": "Claude Sonnet (latest)",
+        "opus": "Claude Opus (latest)",
         "haiku": "Claude Haiku (latest)",
-        "claude-fable-5": "Claude Fable 5",
-        "claude-mythos-5": "Claude Mythos 5",
-        "claude-opus-5": "Claude Opus 5",
         "claude-sonnet-5": "Claude Sonnet 5",
-        "claude-haiku-4": "Claude Haiku 4",
-        "claude-opus-4": "Claude Opus 4",
-        "claude-sonnet-4": "Claude Sonnet 4",
-        "claude-sonnet-3": "Claude Sonnet 3",
-        "claude-haiku-3": "Claude Haiku 3",
+        "claude-opus-5": "Claude Opus 5",
+        "fable": "Claude Fable (needs usage credits)",
+        "best": "Claude — best available (needs usage credits)",
     },
     "codex": {
         "gpt-5.4": "GPT-5.4",
@@ -64,13 +59,10 @@ MODEL_CHOICES = {
         "gpt-5.3-codex": "GPT-5.3 Codex",
         "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
         "gpt-5.2-codex": "GPT-5.2 Codex",
-        "gpt-5.2": "GPT-5.2",
         "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
         "gpt-5.1-codex": "GPT-5.1 Codex",
         "gpt-5.1-codex-mini": "GPT-5.1 Codex mini",
-        "gpt-5.1": "GPT-5.1",
         "gpt-5-codex": "GPT-5 Codex",
-        "gpt-5-codex-mini": "GPT-5 Codex mini",
         "gpt-5": "GPT-5",
         "codex-mini-latest": "Codex mini (legacy)",
     },
@@ -277,6 +269,18 @@ class _CliRun:
     def exe(self) -> str | None:
         raise NotImplementedError
 
+    def cwd(self, s: dict) -> str:
+        return s["worktree"]
+
+    def why(self) -> str:
+        return f"hard task, so it runs on {PLAN[self.engine]} instead of per-use billing"
+
+    def emit_ok(self, summary: str, usage: dict) -> None:
+        """What a finished turn looks like: a review card for agent runs."""
+        self.store.emit(self.sid, "finish", {"summary": summary[:6000] or "Done.", "tests": "not_run",
+                                             "subscription": True})
+        self.store.update(self.sid, status="review")
+
     async def run(self, text: str) -> bool:
         """True if the tool finished the turn; False means: fall back (other plan or the router agent)."""
         store, sid = self.store, self.sid
@@ -291,12 +295,11 @@ class _CliRun:
         store.update(sid, status="running")
         store.emit(sid, "model", {"model": s.get("model") or self.engine.replace("_", "-"), "name": name,
                                   "via": PLAN[self.engine], "subscription": True,
-                                  "why": f"hard task, so it runs on {PLAN[self.engine]} instead of per-use billing",
-                                  "explain": {"level": "hard", "because": "hard agent work runs on a plan you "
-                                              "already pay for, so it adds no per-use cost.",
+                                  "why": self.why(),
+                                  "explain": {"level": "hard", "because": self.why(),
                                               "subscription": True}})
         try:
-            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=s["worktree"],
+            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=self.cwd(s),
                                                         env=_worker_env(), stdout=asyncio.subprocess.PIPE,
                                                         stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
                                                         limit=16 * 1024 * 1024)
@@ -336,9 +339,7 @@ class _CliRun:
             store.add_usage(sid, 0.0, usage.get("tokens_in", 0), usage.get("tokens_out", 0))   # included in plan
             self.desk.count_subscription_run(sid, usage)
         if ok:
-            store.emit(sid, "finish", {"summary": summary[:6000] or "Done.", "tests": "not_run",
-                                       "subscription": True})
-            store.update(sid, status="review")
+            self.emit_ok(summary, usage)
             return True
         reason = summary or err or f"exit {proc.returncode}"
         if hit_limit(reason):
@@ -486,3 +487,74 @@ class CodexRun(_CliRun):
 
 
 RUNNERS = {"claude_code": ClaudeCodeRun, "codex": CodexRun}
+
+
+# ------------------------------------------------------- chats on a plan
+CHAT_NOTE = ("You are answering questions in a Promptaro chat on the user's own plan. Answer "
+             "directly and briefly. You may read files to ground an answer, but never change "
+             "anything — no writes, no edits, no commands.")
+
+
+def _chat_space() -> Path:
+    """Empty scratch dir for unbound chats, so even read-only tools see nothing else."""
+    from router import catalog
+    d = catalog.HOME / "chat-space"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class _ChatRun(_CliRun):
+    """One chat turn through a plan tool — read-only, and the reply lands as a normal chat
+    answer (not an agent review card). Session resumption keeps the conversation going."""
+
+    def cwd(self, s: dict) -> str:
+        return s.get("project") or str(_chat_space())
+
+    def why(self) -> str:
+        return f"your pick — answered on {PLAN[self.engine]} instead of per-use billing"
+
+    def emit_ok(self, summary: str, usage: dict) -> None:
+        s, sid = self.store.get(self.sid), self.sid
+        name = LABEL[self.engine] if not self.variant \
+            else MODEL_CHOICES[self.engine].get(self.variant, self.variant)
+        self.store.emit(sid, "assistant", {
+            "text": summary[:6000] or "Done.", "model": s.get("model") or self.engine.replace("_", "-"),
+            "name": name, "via": PLAN[self.engine], "subscription": True, "passed": True,
+            "cached": False, "cost": 0.0, "calls": 1, "free": False,
+            "tokens_in": usage.get("tokens_in", 0), "tokens_out": usage.get("tokens_out", 0),
+            "why": f"answered on {PLAN[self.engine]} — included in your plan, no per-use cost",
+            "explain": {"subscription": True, "because": "answered on a plan you already pay for"},
+            "offline": False})
+        self.store.update(sid, status="idle")
+
+
+class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
+    engine = "claude_code"
+
+    def args(self, exe, text, s, st):
+        # Read tools are auto-permitted; everything else is denied in print mode (no one to ask).
+        a = [exe, "-p", text, "--output-format", "stream-json", "--verbose",
+             "--append-system-prompt", CHAT_NOTE,
+             "--allowedTools", "Read", "Grep", "Glob", "LS", "--disallowedTools", *NEVER_TOOLS]
+        if self.variant:
+            a += ["--model", self.variant]
+        if st.get("claude_session"):
+            a += ["--resume", st["claude_session"]]
+        return a
+
+
+class CodexChatRun(_ChatRun, CodexRun):
+    engine = "codex"
+
+    def args(self, exe, text, s, st):
+        # read-only sandbox: can inspect the bound folder, can't change anything.
+        common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
+        if self.variant:
+            common += ["-m", self.variant]
+        prompt = f"{CHAT_NOTE}\n\n{text}"
+        if st.get("codex_session"):
+            return [exe, "exec", "resume", *common, st["codex_session"], prompt]
+        return [exe, "exec", *common, prompt]
+
+
+CHAT_RUNNERS = {"claude_code": ClaudeChatRun, "codex": CodexChatRun}

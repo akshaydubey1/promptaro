@@ -105,14 +105,31 @@ def test_fallback_ignores_other_plans_pick(desk_factory):
     assert run.variant == "" and run.engine == "codex"
 
 
-def test_chat_pick_of_plan_model_stays_auto(client, claude):
-    """Chats can't run on the plan lane (it needs a worktree); picking one falls back to Auto."""
-    client.fake.shared = ["plain answer"]
+def test_chat_pick_uses_the_plan(client, claude, repo):
+    """A subscription pick in a chat answers through the official CLI, read-only."""
+    sid = client.post("/api/sessions", json={"project": str(repo), "model": "claude-code:opus"},
+                      headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": "hi"}, headers=H)
+    s = wait_answer(client, sid, 1)
+    a = [e for e in s["events"] if e["kind"] == "assistant"][0]["data"]
+    assert a["subscription"] and a["model"] == "claude-code:opus" and a["cost"] == 0.0
+    argv = json.loads(claude.read_text())["argv"]
+    assert argv[argv.index("--model") + 1] == "opus"
+    allowed = argv[argv.index("--allowedTools") + 1:]
+    assert "Read" in allowed and "Write" not in allowed and "Bash" not in allowed
+
+
+def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
+    """When the plan tool can't answer, a normal model does — and the chat says so."""
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
+    client.fake.shared = ["router answer"]
     sid = client.post("/api/sessions", json={"model": "claude-code:opus"}, headers=H).json()["id"]
     client.post(f"/api/sessions/{sid}/messages", json={"text": "hi"}, headers=H)
     s = wait_answer(client, sid, 1)
     a = [e for e in s["events"] if e["kind"] == "assistant"][0]["data"]
-    assert a["model"] in ("small", "medium", "large") and not claude.exists()
+    assert a["model"] in ("small", "medium", "large") and not a.get("subscription")
+    notes = [e["data"]["text"] for e in s["events"] if e["kind"] == "note"]
+    assert any("regular model" in n for n in notes)
 
 
 # --------------------------------------------------------------- project chat
@@ -274,16 +291,34 @@ def test_generate_needs_the_app_header(client):
 def test_media_provider_order_and_fallback(monkeypatch):
     """Best-first: a failing provider hands off to the next connected one."""
     from router import media
-    calls = []
-    monkeypatch.setattr(media.secrets, "has", lambda k: k in ("GEMINI_API_KEY", "HF_TOKEN", "TOGETHER_API_KEY"))
-    monkeypatch.setitem(media._GENERATORS, ("gemini", "image"),
+    monkeypatch.setattr(media.secrets, "has", lambda k: k in ("HF_TOKEN", "TOGETHER_API_KEY"))
+    monkeypatch.setitem(media._GENERATORS, ("huggingface", "image"),
                         lambda p, w, h: (_ for _ in ()).throw(RuntimeError("quota")))
-    monkeypatch.setitem(media._GENERATORS, ("huggingface", "image"), lambda p, w, h: (b"img" * 100, "image/png"))
+    monkeypatch.setitem(media._GENERATORS, ("together", "image"), lambda p, w, h: (b"img" * 100, "image/png"))
     data, mime, who = media.generate("image", "a lighthouse", 512, 512)
-    assert who == "huggingface" and mime == "image/png"
+    assert who == "together" and mime == "image/png"
     monkeypatch.setattr(media.secrets, "has", lambda k: False)
     monkeypatch.setitem(media._GENERATORS, ("pollinations", "image"), lambda p, w, h: (b"p" * 200, "image/jpeg"))
     assert media.generate("image", "x", 512, 512)[2] == "pollinations"
+
+
+def test_paid_media_lane_needs_opt_in(monkeypatch):
+    """Google's image models may bill once free quota ends — off until the user says so."""
+    from router import media
+    called = []
+    monkeypatch.setattr(media.secrets, "has", lambda k: k == "GEMINI_API_KEY")
+    monkeypatch.setitem(media._GENERATORS, ("gemini", "image"),
+                        lambda p, w, h: called.append(1) or (b"g" * 200, "image/png"))
+    monkeypatch.setitem(media._GENERATORS, ("pollinations", "image"), lambda p, w, h: (b"p" * 200, "image/jpeg"))
+    assert media.generate("image", "x", 64, 64)[2] == "pollinations" and not called
+    monkeypatch.setattr(media.catalog, "get_settings", lambda: {"paid_media": True})
+    assert media.generate("image", "x", 64, 64)[2] == "gemini"
+    assert media.status()[0]["enabled"] is True
+
+
+def test_paid_media_setting_round_trip(client):
+    assert client.post("/connect/settings", headers=H, json={"paid_media": True}).status_code == 200
+    assert client.get("/api/tools/capabilities").json()["paid_media"] is True
 
 
 def test_media_video_error_names_the_fix(monkeypatch):
@@ -373,3 +408,86 @@ def test_convert_rejects_bad_input(client):
     assert r.status_code == 400 and "Not found" in r.json()["detail"]
     assert client.get("/api/tools/output/..%2F..%2Fetc%2Fpasswd").status_code in (404, 422)
     assert client.get("/api/tools/output/not-a-file.bin").status_code == 404
+
+
+# ------------------------------------------------------- safety fixes (review)
+def test_project_chat_refuses_home_and_drives(client):
+    """A project chat can read everything inside its folder — home and drive roots are refused."""
+    for bad in (str(Path.home()), str(Path.home().parent), str(Path(Path.home().anchor))):
+        r = client.post("/api/sessions", json={"project": bad}, headers=H)
+        assert r.status_code == 400, bad
+
+
+def test_workspace_never_reads_credential_files(tmp_path):
+    from desk.tools import ToolError, Workspace
+    proj = tmp_path / "proj"
+    (proj / ".ssh").mkdir(parents=True)
+    (proj / ".env").write_text("TOKEN=abc123")
+    (proj / ".env.production").write_text("TOKEN=abc123")
+    (proj / ".ssh" / "id_rsa").write_text("key")
+    (proj / "certs").mkdir()
+    (proj / "certs" / "server.pem").write_text("pem")
+    (proj / "ok.py").write_text("print(1)\n")
+    ws = Workspace(proj)
+    for p in (".env", ".env.production", ".ssh", ".ssh/id_rsa", "certs/server.pem"):
+        with pytest.raises(ToolError, match="credentials"):
+            asyncio.run(ws.read_file(p))
+    assert asyncio.run(ws.read_file("ok.py")).ok
+    listing = asyncio.run(ws.list_files()).output
+    assert ".env" not in listing and "server.pem" not in listing and "ok.py" in listing
+
+
+def test_read_tools_redact_secret_values(tmp_path):
+    from desk.tools import Workspace
+    (tmp_path / "appconfig.py").write_text('API_KEY = "sk-ant-abcdef1234567890abcdef"\n')
+    out = asyncio.run(Workspace(tmp_path).read_file("appconfig.py"))
+    assert "abcdef1234567890abcdef" not in out.output
+
+
+def test_output_names_with_spaces_download_and_dedupe(client, tmp_path):
+    pytest.importorskip("PIL")
+    img = _png(tmp_path / "My Photo.png")
+    r = client.post("/api/tools/convert", headers=H,
+                    json={"action": "convert", "inputs": [str(img)], "format": "jpg"})
+    assert r.status_code == 200, r.text
+    out = r.json()["outputs"][0]
+    assert " " in out["name"]
+    assert client.get(out["url"]).status_code == 200
+    again = client.post("/api/tools/convert", headers=H,
+                        json={"action": "convert", "inputs": [str(img)], "format": "jpg"})
+    other = again.json()["outputs"][0]
+    assert other["name"] != out["name"] and client.get(other["url"]).status_code == 200
+
+
+def test_endpoint_rules_for_remote_and_local(client, monkeypatch):
+    monkeypatch.setattr(catalog, "discover_endpoint_models", lambda *a, **k: ["m1"])
+    # plain http to a remote host would send keys/prompts unencrypted
+    r = client.post("/connect/endpoints", headers=H,
+                    json={"label": "x", "base_url": "http://llm.example.com/v1"})
+    assert r.status_code == 400 and "https" in r.json()["detail"]
+    # a remote endpoint isn't a "free" model — it counts as paid so budget caps apply
+    client.post("/connect/endpoints", headers=H,
+                json={"label": "Corp", "base_url": "https://llm.corp.example/v1", "private": True})
+    spec = [s for s in catalog.custom_specs() if "Corp" in s["name"]][0]
+    assert spec["free"] is False
+    # localhost is private (and free) even without the checkbox
+    client.post("/connect/endpoints", headers=H,
+                json={"label": "Ollama", "base_url": "http://localhost:11434/v1"})
+    ep = [e for e in client.get("/connect/status").json()["endpoints"] if e["label"] == "Ollama"][0]
+    assert ep["private"] is True
+    spec = [s for s in catalog.custom_specs() if "Ollama" in s["name"]][0]
+    assert spec["free"] is True
+
+
+def test_text_pdf_handles_unicode(tmp_path):
+    pytest.importorskip("reportlab")
+    pytest.importorskip("pypdf")
+    from desk import convert
+    txt = tmp_path / "hindi.txt"
+    txt.write_text("नमस्ते दुनिया — hello world")
+    out = convert.make_pdf([txt], tmp_path / "out.pdf")
+    assert out.read_bytes()[:5] == b"%PDF-"
+    if convert._uni_font():                       # a wide-coverage font exists on this machine
+        from pypdf import PdfReader
+        got = "\n".join(pg.extract_text() or "" for pg in PdfReader(str(out)).pages)
+        assert "नमस्ते" in got

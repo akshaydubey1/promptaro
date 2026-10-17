@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 import wave
 from io import BytesIO
 from pathlib import Path
@@ -67,33 +68,76 @@ def _run(cmd: list[str]) -> None:
 
 
 # ------------------------------------------------------------------ PDF
+_UNI_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",   # macOS
+    "/Library/Fonts/Arial Unicode.ttf",
+    "C:/Windows/Fonts/arialuni.ttf",                           # Windows (Office)
+    "C:/Windows/Fonts/segoeui.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",         # Linux
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+)
+_uni_font_name: str | None | bool = None        # None = not probed yet
+
+
+def _uni_font() -> str | None:
+    """A wide-coverage TTF already on the system, registered once with reportlab.
+    Without one, non-Latin text (Hindi, CJK, emoji) can't render in a PDF."""
+    global _uni_font_name
+    if _uni_font_name is not None:
+        return _uni_font_name or None
+    _uni_font_name = False
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+    except ImportError:
+        return None
+    for cand in _UNI_FONT_CANDIDATES:
+        if Path(cand).is_file():
+            try:
+                pdfmetrics.registerFont(TTFont("UniSans", cand))
+                _uni_font_name = "UniSans"
+                return "UniSans"
+            except Exception:
+                continue
+    return None
+
+
+def _enc(line: str, font: str | None) -> str:
+    """Standard PDF fonts only cover latin-1; a unicode font renders the rest."""
+    return line if font else line.encode("latin-1", "replace").decode("latin-1")
+
+
 def _text_pdf(text: str, title: str = "") -> BytesIO:
-    """Plain text/markdown -> PDF pages. Standard fonts cover latin-1; other
-    characters are replaced rather than failing the whole export."""
+    """Plain text/markdown -> PDF pages. Uses a wide-coverage system font when the
+    text isn't latin-1; if none is installed, unmappable chars are replaced rather
+    than failing the whole export."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
+    font = _uni_font() if any(ord(ch) > 255 for ch in (title + text)) else None
+    body_font = font or "Helvetica"
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     pw, ph = A4
     x, y, line_h = 56, ph - 60, 15
-    c.setFont("Helvetica", 11)
+    c.setFont(body_font, 11)
     if title:
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(x, y, title.encode("latin-1", "replace").decode("latin-1"))
+        c.setFont(body_font, 14)
+        c.drawString(x, y, _enc(title, font))
         y -= line_h * 2
-        c.setFont("Helvetica", 11)
+        c.setFont(body_font, 11)
     for raw in text.splitlines() or [""]:
-        line = raw.lstrip("#*>-` ").encode("latin-1", "replace").decode("latin-1")
+        line = _enc(raw.lstrip("#*>-` "), font)
         while len(line) > 95:
             c.drawString(x, y, line[:95])
             y -= line_h
             line = line[95:]
             if y < 60:
-                c.showPage(); c.setFont("Helvetica", 11); y = ph - 60
+                c.showPage(); c.setFont(body_font, 11); y = ph - 60
         c.drawString(x, y, line)
         y -= line_h
         if y < 60:
-            c.showPage(); c.setFont("Helvetica", 11); y = ph - 60
+            c.showPage(); c.setFont(body_font, 11); y = ph - 60
     c.save()
     buf.seek(0)
     return buf
@@ -171,7 +215,7 @@ def convert(inp: Path, out_dir: Path, fmt: str) -> Path:
     """One file -> another format. Returns the new file's path."""
     fmt = fmt.lower().lstrip(".")
     ext = inp.suffix.lower().lstrip(".")
-    out = out_dir / f"{inp.stem}.{fmt}"
+    out = unique_path(out_dir / f"{inp.stem}.{fmt}")
     if ext == fmt:
         raise RuntimeError(f"{inp.name} is already a .{fmt} file.")
     if ext in IMG_EXTS:
@@ -278,6 +322,14 @@ def resolve_inputs(raw: list[str]) -> list[Path]:
     if not out:
         raise RuntimeError("Add at least one file.")
     return out
-    if not out:
-        raise RuntimeError("Add at least one file.")
-    return out
+
+
+def unique_path(out: Path) -> Path:
+    """Never overwrite an earlier result: foo.pdf -> foo-2.pdf -> foo-3.pdf …"""
+    if not out.exists():
+        return out
+    for i in range(2, 1000):
+        cand = out.with_name(f"{out.stem}-{i}{out.suffix}")
+        if not cand.exists():
+            return cand
+    return out.with_name(f"{out.stem}-{int(time.time())}{out.suffix}")
