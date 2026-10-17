@@ -12,6 +12,7 @@ beyond loopback). Without it, mutations still require the x-promptaro app header
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 from contextlib import asynccontextmanager
@@ -34,8 +35,9 @@ router: Router | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global router
-    router = Router(ROOT, db_path=os.environ.get("ROUTER_DB"))
+    router = Router(ROOT, db_path=os.environ.get("ROUTER_DB"), refresh_catalog=False)
     app.state.router = router
+    asyncio.create_task(router.refresh_catalog())
     yield
     await router.aclose()
 

@@ -52,6 +52,14 @@ def make_router(tmp_path, monkeypatch, test_root):
     return _make
 
 
+def test_refresh_catalog_swaps_registry_off_critical_path(tmp_path, test_root):
+    """Startup builds cache-only; refresh_catalog() rebuilds with live lists in the background."""
+    r = Router(test_root, db_path=tmp_path / "t.db", use_catalog=False, refresh_catalog=False)
+    old = r.registry
+    asyncio.run(r.refresh_catalog())
+    assert r.registry is not old
+
+
 def run(r, **kw):
     return asyncio.run(r.run(RunRequest(**kw)))
 

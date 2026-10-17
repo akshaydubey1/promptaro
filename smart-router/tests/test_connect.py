@@ -73,6 +73,15 @@ def test_no_connection_means_no_models(fake_catalog):
     assert catalog.build_specs({"vendors": ["anthropic", "openai"]}) == []
 
 
+def test_cached_only_build_specs_never_hits_network(fake_catalog, monkeypatch):
+    """Startup path: serve the disk cache instantly; the real refresh runs in the background."""
+    secrets.set("OPENROUTER_API_KEY", "sk-or-x")
+    monkeypatch.setattr(catalog, "fetch_openrouter_models",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("network on cached path")))
+    specs = {s["id"]: s for s in catalog.build_specs({"vendors": ["anthropic"]}, cached_only=True)}
+    assert "anthropic/claude-small-9" in specs
+
+
 def test_openrouter_signin_unlocks_all_vendors_with_real_prices(fake_catalog):
     secrets.set("OPENROUTER_API_KEY", "sk-or-x")
     specs = {s["id"]: s for s in catalog.build_specs({"vendors": ["anthropic", "openai"]})}

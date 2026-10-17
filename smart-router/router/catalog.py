@@ -308,8 +308,12 @@ def ollama_models(client: httpx.Client | None = None) -> list[str]:
         return []
 
 
-def build_specs(cfg: dict, client: httpx.Client | None = None) -> list[dict]:
-    """Return model dicts in the same shape as config/models.yaml entries."""
+def build_specs(cfg: dict, client: httpx.Client | None = None, cached_only: bool = False) -> list[dict]:
+    """Return model dicts in the same shape as config/models.yaml entries.
+
+    cached_only=True serves whatever is already on disk and never touches the
+    network — used at startup so the app can open immediately, with the real
+    refresh happening in the background afterwards."""
     if not cfg.get("enabled", True):
         return []
     local = []
@@ -321,7 +325,10 @@ def build_specs(cfg: dict, client: httpx.Client | None = None) -> list[dict]:
                           "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": 2500,
                           "prior": {k: v - 0.15 for k, v in TIER_PRIOR[1].items()}})
     free_mode = get_settings().get("free_models", "chat")
-    models = fetch_openrouter_models(cfg.get("refresh_s", 86400), client)
+    if cached_only:
+        models = _read_cache("openrouter_models.json", 10 ** 9) or []
+    else:
+        models = fetch_openrouter_models(cfg.get("refresh_s", 86400), client)
     vendors = cfg.get("vendors", "all")
     if vendors == "all" or vendors == ["all"]:
         vendors = all_vendors(models, int(cfg.get("max_vendors", MAX_VENDORS)))
