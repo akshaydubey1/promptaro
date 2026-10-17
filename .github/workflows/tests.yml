@@ -29,6 +29,9 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -r smart-router/requirements.txt -r promptaro/requirements.txt
 
+      - name: Guardrails — leaks, auth, fail-closed defaults
+        run: python -m pytest smart-router/tests/test_guardrails.py promptaro/tests/test_guardrails.py -q
+
       - name: Smart Router suite
         run: python -m pytest tests -q
         working-directory: smart-router
