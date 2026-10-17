@@ -137,8 +137,30 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 63+ tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 74 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
+
+## Migrating from Tillwright
+
+First run moves `~/.akshay-router` and `~/.tillwright` into `~/.promptaro` — keys, settings,
+sessions, quota ledger and worktrees. Nothing in `~/.promptaro` is overwritten, worktree paths
+inside `desk.db` are rewritten, and the old `akshay-smart-router` keychain entries are still
+read. `tw-claude`/`tw-aider`/`tw-env` and the `tillwright-*` model aliases keep working
+alongside the `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to opt out, and
+`PROMPTARO_HOME` to put the data somewhere else entirely.
+
+## Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| macOS says the app is damaged/can't be opened | Right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/Promptaro.app` (it isn't Apple-signed) |
+| `promptaro-claude: command not found` | Coding tools → re-run the launcher install, then add `~/.local/bin` to PATH (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`) |
+| Old sessions or keys seem missing | Check `~/.promptaro` — migration moves them from `~/.tillwright`/`~/.akshay-router`. Set `TILLWRIGHT_LEGACY_HOME`/`AKSHAY_ROUTER_LEGACY_HOME` if they lived elsewhere. |
+| "Not a git repository" starting an agent | Choose **Set it up with git** in the task dialog, or `git init` the folder first |
+| No models / "add a key" | Connections → sign in with OpenRouter, or paste a provider key; Ollama is detected when running |
+| Free requests exhausted | Providers reset per minute and at midnight UTC — the ledger pauses and moves on; paid models only fill in if spending is allowed |
+| Agent stopped at budget | Raise the task's dollar cap (or the daily cap in Connections) and send "continue" |
+| Something crashed | `~/.promptaro/promptaro.log`; the app auto-offers **Restart now** after a code update |
 
 ## Not built yet
 

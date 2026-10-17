@@ -109,7 +109,7 @@ The model call itself dominates total time; routing is noise next to it.
 ## Tests
 
 ```bash
-python -m pytest -q     # 90 tests, fully offline (mocked providers and sign-in)
+python -m pytest -q     # 95 tests, fully offline (mocked providers and sign-in)
 ```
 
 ---

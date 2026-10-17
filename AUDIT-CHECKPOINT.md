@@ -7,49 +7,60 @@ Owner: Akshay Dubey. Branch: `audit/promptaro-baseline` (work happens here; main
 - Start commit: `c0e4655` "Initial commit: Tillwright app and Smart Router" (only commit on main).
 - Env: macOS, Python 3.14.6, venv at repo root `.venv/` (fastapi 0.143.3, httpx 0.28.1,
   pydantic 2.14.1, pytest 9.1.1, uvicorn 0.54.0, keyring 25.7.0, PyYAML 6.0.3).
-- Tests: `smart-router`: 90 pass (2.65s). `tillwright`: 59 pass (13.6s). All offline/mocked.
-- `smart-router/bench.py`: worst p99 22.47 ms (<100 ms target met).
-- Two components: `smart-router/` (router pkg: engine, selector, catalog, quota, gateway,
-  providers, checks, context, classifier, skills, store, secrets, connect, api, cli) and
-  `tillwright/` (desk pkg: desk, agent, workers, tools, gitops, launchers, server, store, build + ui/).
+- Tests at baseline: `smart-router` 90 pass (2.65s); `tillwright` 59 pass (13.6s). All offline/mocked.
+- `smart-router/bench.py` at baseline: worst p99 22.47 ms (<100 ms target met).
 
-## Findings so far (lead's own read + agent audits; see final report for full list)
+## Commits on this branch (oldest → newest)
 
-Confirmed bugs to fix (ranked):
-1. Cache key misses dimensions (system_extra/prefer/quality_target/private/image content) -> wrong
-   cached answers. engine.py:221.
-2. `private` only honored on gateway path; /v1/run + CLI can send code to trains=True free
-   providers. Secondary calls (_maybe_llm_classify, _review) also ignore private.
-3. Gateway `plan()` exact-model match bypasses free_only filter -> free-only mode fails OPEN
-   when a tool names a paid model. gateway.py:349-351.
-4. Context-window/quota/cost checks use untrimmed context estimate -> large-context requests
-   hard-fail; budget checks inflated. classifier.py:132 vs engine.py:157.
-5. max_cost_usd not enforced on primary attempt (engine.py:238 `i > 0`).
-6. tools.py safe-command list reads outside workspace (`cat ~/.ssh/id_rsa` auto-approves);
-   _NEVER blacklist bypassable (`rm -rf ~/x`, `rm -rf /etc` under never_ask); Windows: os.killpg
-   missing -> timeout path crashes.
-7. workers.py: `never_ask` runs Claude Code with bypassPermissions + weak blacklist; SAFE_TOOLS
-   `cat:*`/`find:*` allow reading/deleting anywhere on disk.
-8. Quota ledger allow() is check-then-act; concurrent requests overshoot minute limits.
-9. checks.py runs generated pytest with full user env (secrets, network); on by default.
-10. Learning has no decay/self-heal; ~6 fails can exile a model forever.
-11. trim_ladder can duplicate the strongest candidate. selector.py:199-205.
-12. Classifier: `schema` forces json-mode; zero-signal confidence 0.6 > contested 0.45;
-    `go`/`class`/`SELECT .* FROM` misfires; complexity cues uncapped.
-13. Anthropic stream() lacks cache_control on last message (cache miss on multi-turn).
-14. Branding: product is Promptaro; app still Tillwright everywhere (dirs ~/.tillwright,
-    ~/.akshay-router, keychain service, tw-* launchers, x-tillwright headers, model ids
-    `tillwright-auto`). Must preserve data/credentials/launchers -> migrate, not blanket rename.
+| Commit | What |
+|---|---|
+| `5fdd15b` | Spend controls, privacy plumbing, quota accounting, API auth |
+| `a3febd7` | Command containment in workspace + local-surface hardening |
+| `771a931` | Hard daily spend cap + sticky gateway sessions |
+| `44e982e` | Reproducible installs (pinned deps), Windows reinstall detection, Docker/.env fixes |
+| `14a2b9f` | Tillwright → Promptaro migration (dirs, keychain, headers, aliases, launchers) |
+| `5cc7ac5` | Chat draft restore, router-UI workspace flow, Gatekeeper note |
+| `54893bf` | Independent-review fixes (never_ask vetting, ledger coverage, migration unification, stream keys) |
 
-Research-backed improvements to adopt (see comparable-systems report):
-- Sticky model per gateway conversation (preserves provider prompt cache; OpenRouter does this).
-- Semantic cache tier over exact hash (local embeddings; Portkey/GPTCache contract).
-- Tool-output pruning before LLM compaction (OpenCode); warm-prefix-aware compaction (Claude Code).
-- Anthropic cache breakpoints (<=4, min-prefix caveat); typed fallbacks (context-overflow up-route).
-- Standing daily budget + soft alert (LiteLLM virtual keys pattern).
-- Sampled token counting instead of len/4.
-- Learned quality estimates from own logs (RouteLLM MF-lite: already have the data).
+## Verified now
 
-## Status
-Baseline complete. Awaiting remaining audit agents (architecture, providers/gateway, security, UX/branding).
-Next: consolidate -> prioritize -> implement on this branch -> tests -> review -> docs.
+- `pytest promptaro/tests smart-router/tests`: **169 pass** (74 promptaro + 95 smart-router), ~16s.
+- `bench.py`: worst p99 **13.45 ms** (was 22.47).
+- `git diff --check`: clean. `py_compile` + `bash -n` on scripts: clean.
+- Real legacy dirs present on this machine (`~/.akshay-router`, `~/.tillwright`); migration tested
+  against fixture copies, NOT the real dirs (first real app launch performs it).
+
+## What changed (summary)
+
+- **Money safety**: free-only fails closed; per-request + daily caps; quota reservations
+  (begin/settle/abandon) on primary, forced, and secondary calls; cached-token pricing.
+- **Routing**: post-trim estimates, complete cache keys, first-attempt quality signal,
+  time-decayed telemetry, escalation on evidence, sticky sessions, exact-name failover.
+- **Security**: workspace-confined files/commands, `never_ask`-proof vetting (substitution
+  recursion, exfil reads, outside writes, device redirects), scrubbed subprocess envs,
+  git-hook hardening, app-header + token auth, short-lived SSE keys, secret redaction.
+- **Migration**: `~/.akshay-router` + `~/.tillwright` → `~/.promptaro` once per process,
+  never-clobber, desk.db worktree rewrite, dual keychain/file credential fallback,
+  `x-tillwright` header + `tillwright-*` aliases + `tw-*` launcher shims kept.
+- **Install**: pinned requirements, `ROUTER_HOME` on the Docker volume, `env_file`,
+  `.env.example`, PS1 reinstall-stamp fix, Linux chmod, Gatekeeper note.
+
+## Assumptions & limitations
+
+- All tests are offline/mocked; **no live provider calls were made**. Free-tier limits and
+  provider behaviors are taken from docs, not verified against live accounts.
+- Cost/token savings claimed (cache breakpoints, per-step routing) are structural — measured
+  savings need real workloads; routing overhead is the only number measured (<100ms target).
+- Real `~/.akshay-router`/`~/.tillwright` migration is covered by tests on fixture dirs but
+  has not run against the real dirs yet — first actual app launch will perform it.
+- Windows `.bat`/`.ps1` and Linux paths are reviewed but only macOS is exercised on this machine.
+- `needs_approval` is a strong policy gate, not a sandbox — agent commands still run as the
+  user inside the worktree (documented residual risk).
+
+## Remaining backlog (ordered)
+
+1. Live-provider validation: connect a real key, run free-tier + failover paths end to end.
+2. Measure real token/cost savings vs baseline on representative tasks.
+3. Semantic cache tier (local embeddings); sampled token counting.
+4. Signed/notarized installers; auto-update channel.
+5. `checks.py` subprocess network isolation (sandbox-exec/profile) if untrusted repos matter.
