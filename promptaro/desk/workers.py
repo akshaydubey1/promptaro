@@ -36,8 +36,45 @@ REST_S = 3600             # how long a plan rests after hitting its usage limit
 ENGINES = ("claude_code", "codex")
 MODEL_IDS = {"claude-code": "claude_code", "codex": "codex"}      # Model menu id -> engine
 # Extra picks under each plan, e.g. "claude-code:opus" -> claude -p --model opus.
-MODEL_CHOICES = {"claude_code": {"sonnet": "Claude Sonnet", "opus": "Claude Opus", "haiku": "Claude Haiku"},
-                 "codex": {"gpt-5-codex": "GPT-5 Codex", "gpt-5": "GPT-5", "codex-mini-latest": "Codex mini"}}
+# Aliases ("opus", "fable") always map to the newest version on the plan; pinned
+# names ("claude-opus-4") hold a specific generation. The set mirrors the model
+# catalog bundled with current Claude Code / Codex releases — an entry the plan
+# can't serve simply fails that run and the usual fallback picks up.
+MODEL_CHOICES = {
+    "claude_code": {
+        "best": "Claude — best available",
+        "fable": "Claude Fable (latest)",
+        "mythos": "Claude Mythos (latest)",
+        "opus": "Claude Opus (latest)",
+        "sonnet": "Claude Sonnet (latest)",
+        "haiku": "Claude Haiku (latest)",
+        "claude-fable-5": "Claude Fable 5",
+        "claude-mythos-5": "Claude Mythos 5",
+        "claude-opus-5": "Claude Opus 5",
+        "claude-sonnet-5": "Claude Sonnet 5",
+        "claude-haiku-4": "Claude Haiku 4",
+        "claude-opus-4": "Claude Opus 4",
+        "claude-sonnet-4": "Claude Sonnet 4",
+        "claude-sonnet-3": "Claude Sonnet 3",
+        "claude-haiku-3": "Claude Haiku 3",
+    },
+    "codex": {
+        "gpt-5.4": "GPT-5.4",
+        "gpt-5.4-mini": "GPT-5.4 mini",
+        "gpt-5.3-codex": "GPT-5.3 Codex",
+        "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
+        "gpt-5.2-codex": "GPT-5.2 Codex",
+        "gpt-5.2": "GPT-5.2",
+        "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+        "gpt-5.1-codex": "GPT-5.1 Codex",
+        "gpt-5.1-codex-mini": "GPT-5.1 Codex mini",
+        "gpt-5.1": "GPT-5.1",
+        "gpt-5-codex": "GPT-5 Codex",
+        "gpt-5-codex-mini": "GPT-5 Codex mini",
+        "gpt-5": "GPT-5",
+        "codex-mini-latest": "Codex mini (legacy)",
+    },
+}
 LABEL = {"claude_code": "Claude Code", "codex": "Codex"}
 PLAN = {"claude_code": "your Claude subscription", "codex": "your ChatGPT subscription"}
 

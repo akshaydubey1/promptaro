@@ -82,6 +82,8 @@ def test_models_endpoint_lists_plan_models(client, claude):
     models = client.get("/api/models").json()
     ids = [m["id"] for m in models if m.get("subscription")]
     assert "claude-code" in ids and "claude-code:opus" in ids and "claude-code:sonnet" in ids
+    expected = {f"claude-code:{v}" for v in workers.MODEL_CHOICES["claude_code"]} | {"claude-code"}
+    assert expected <= set(ids)                                            # every version the plan knows is offered
     assert not any(i.startswith("codex") for i in ids)                     # codex isn't installed here
 
 
@@ -91,7 +93,7 @@ def test_claude_variant_reaches_cli(claude, desk_factory, repo):
     argv = json.loads(claude.read_text())["argv"]
     assert argv[argv.index("--model") + 1] == "opus"
     ev = desk.store.events(sid)
-    assert any(e["kind"] == "model" and e["data"]["name"] == "Claude Opus"
+    assert any(e["kind"] == "model" and e["data"]["name"] == "Claude Opus (latest)"
                and e["data"]["subscription"] for e in ev)
 
 

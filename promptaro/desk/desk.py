@@ -25,6 +25,8 @@ Promptaro, answer from these facts only (don't invent features):
   Auto; Priority picks Balanced / Lowest cost / Fastest / Best quality.
 - New project chat: a chat bound to a folder; the model reads that project's files to answer but can never
   change or run anything (read-only).
+- The sidebar groups work by project: "Chats" holds general conversations and "Projects" lists each folder with
+  its own chats and agent tasks; click a project name to fold it, or its + button to start a chat inside it.
 - Each conversation's header has buttons to download the whole conversation as Markdown, close the view, and
   delete it. Chats also have a small x in the sidebar for quick deletion.
 - New agent task (button top-left): choose a project folder (must be a git repository; Promptaro offers
@@ -46,7 +48,8 @@ Promptaro, answer from these facts only (don't invent features):
 - Hard agent tasks run automatically on the user's Claude subscription (through Claude Code) or ChatGPT
   subscription (through Codex CLI) when that tool is installed and signed in — no per-use charge; the plan's usage
   limits apply, and when one plan hits its limit the other plan or the regular models take over. The Model menu
-  can also pick a specific model under a plan (for example Claude Sonnet/Opus/Haiku or a Codex model). Easy chats use free
+  can also pick a specific model under a plan — latest-version aliases like Claude Opus/Sonnet/Haiku or pinned
+  versions like Claude Opus 5 or GPT-5.3 Codex. Easy chats use free
   models (OpenRouter allows 50 free requests a day, or 1000 after buying $10 of credit once); other work uses the
   cheapest paid model that can do it. Each answer shows the model, Free/Paid/Subscription, tokens used, and a
   "Why this model?" link with the options considered. Thumbs up/down teaches the router; thumbs down also offers

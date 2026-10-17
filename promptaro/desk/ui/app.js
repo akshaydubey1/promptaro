@@ -45,11 +45,26 @@ document.addEventListener("click", (e) => {
 
 /* ---------------- sidebar ---------------- */
 async function loadSessions() { S.sessions = await api("/api/sessions"); renderSide(); }
+const projBase = (p) => (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
+function collapsedProjs() {
+  try { return new Set(JSON.parse(localStorage.getItem("promptaro:projCollapsed") || "[]")); } catch { return new Set(); }
+}
 function renderSide() {
-  const agents = S.sessions.filter((s) => s.kind === "agent"), chats = S.sessions.filter((s) => s.kind === "chat");
-  const row = (s) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${s.project ? `<span class="sub"> · ${esc(s.project.split(/[\\/]/).filter(Boolean).pop() || "")}</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
-  $("agentList").innerHTML = agents.map(row).join("") || `<li class="empty-note">No agents yet</li>`;
-  $("chatList").innerHTML = chats.map(row).join("") || `<li class="empty-note">No chats yet</li>`;
+  const row = (s, inProj) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${!inProj && s.project ? `<span class="sub"> · ${esc(projBase(s.project))}</span>` : ""}${inProj && s.kind === "agent" ? `<span class="sub tag">agent</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
+  const unbound = S.sessions.filter((s) => !s.project);
+  const projects = new Map();                                  // path -> sessions, first-seen order
+  for (const s of S.sessions) if (s.project) (projects.get(s.project) || projects.set(s.project, []).get(s.project)).push(s);
+  const collapsed = collapsedProjs();
+  let html = `<div class="group"><h3>Chats</h3><ul>${unbound.map((s) => row(s)).join("") || `<li class="empty-note">No chats yet</li>`}</ul></div>`;
+  if (projects.size) {
+    html += `<div class="group"><h3>Projects</h3>`;
+    for (const [p, items] of projects) {
+      const shut = collapsed.has(p);
+      html += `<div class="proj"><h4 class="proj-head" data-proj="${esc(p)}" title="${esc(p)}"><span class="chev${shut ? " shut" : ""}">▾</span>📁 ${esc(projBase(p))}<span class="count">${items.length}</span><button class="x add" data-add-chat="${esc(p)}" title="New chat in ${esc(projBase(p))}" aria-label="New chat in this project">＋</button></h4><ul${shut ? ' class="hidden"' : ""}>${items.map((s) => row(s, true)).join("")}</ul></div>`;
+    }
+    html += `</div>`;
+  }
+  $("lists").innerHTML = html;
 }
 const statusText = (s) => ({ running: "Working", waiting: "Needs your approval", review: "Ready for review", done: "Merged", discarded: "Discarded", stopped: "Stopped", idle: "Idle" }[s] || s);
 $("side").addEventListener("click", async (e) => {
@@ -58,6 +73,23 @@ $("side").addEventListener("click", async (e) => {
     const s = S.sessions.find((x) => x.id === del.dataset.del);
     if (!confirm(s?.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
     try { await deleteSession(del.dataset.del); } catch (err) { toast(err.message); }
+    return;
+  }
+  const add = e.target.closest("[data-add-chat]");
+  if (add) {
+    try {
+      const s = await api("/api/sessions", { method: "POST", body: { project: add.dataset.addChat } });
+      await loadSessions(); openSession(s.id);
+      toast("New chat in this project — the model reads its files, and can't change them.", 4000);
+    } catch (err) { toast(err.message); }
+    return;
+  }
+  const head = e.target.closest("[data-proj]");
+  if (head) {
+    const p = head.dataset.proj, c = collapsedProjs();
+    c.has(p) ? c.delete(p) : c.add(p);
+    try { localStorage.setItem("promptaro:projCollapsed", JSON.stringify([...c])); } catch { }
+    renderSide();
     return;
   }
   const li = e.target.closest("[data-sid]"); if (li) { openSession(li.dataset.sid); $("side").classList.remove("open"); }
