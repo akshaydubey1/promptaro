@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-# Akshay Smart Router — Author: Akshay Dubey
+# Promptaro Smart Router — Author: Akshay Dubey
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 ROUTER_ROOT=/app ROUTER_DB=/data/router.db \
     ROUTER_HOME=/data

@@ -15,7 +15,7 @@ one when a step fails.
 
 | | |
 |---|---|
-| **Mac** | Double-click **Install Promptaro.command** once. Promptaro.app appears in Applications (and Launchpad and Spotlight); drag it to the Dock. Or double-click **Start Promptaro.command** to run it in a Terminal window. |
+| **Mac** | Double-click **Install Promptaro.command** once. Promptaro.app appears in Applications (and Launchpad and Spotlight); drag it to the Dock. Or double-click **Start Promptaro.command** to run it in a Terminal window. The app isn't Apple-signed: if macOS blocks it, right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/Promptaro.app`. |
 | **Windows** | Double-click **Install Promptaro.bat** once for a Start-menu and desktop shortcut, or **Start Promptaro.bat** to run it. |
 | **Linux** | Run `packaging/install-linux.sh` once for an app-menu entry, or `./launch.sh`. |
 

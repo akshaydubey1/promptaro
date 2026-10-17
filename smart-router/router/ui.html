@@ -148,16 +148,40 @@ async function load(){
     : `<tr><td colspan="4" class="sub">No models yet — connect an account above.</td></tr>`;
 }
 
+async function connectVendor(v, key, workspace_id){
+  return await fetch(`/connect/${v}`, {method:'POST', headers:{'content-type':'application/json','x-promptaro':'1'},
+    body: JSON.stringify(workspace_id ? {key, workspace_id} : {key})});
+}
+
 document.addEventListener('click', async e => {
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on){
     const inp = document.querySelector(`input[data-key="${on}"]`);
     if (!inp.value.trim()) return inp.focus();
     e.target.disabled = true; e.target.textContent = 'Checking…';
-    const r = await fetch(`/connect/${on}`, {method:'POST', headers:{'content-type':'application/json','x-promptaro':'1'}, body: JSON.stringify({key: inp.value})});
+    let key = inp.value;
+    const r = await connectVendor(on, key);
     inp.value = '';
-    if (r.ok) banner('good', 'Connected.');
-    else { const d = (await r.json()).detail; banner('err', typeof d === 'string' ? d : `${d.message} (${d.detail})`); }
+    if (r.ok) { banner('good', 'Connected.'); load(); return; }
+    const d = (await r.json()).detail;
+    if (d && d.code === 'needs_workspace'){              // org-scoped Anthropic key: ask which workspace
+      const pick = (d.workspaces || []).length
+        ? `<select id="wsPick">${d.workspaces.map(w => `<option value="${esc(w.id)}">${esc(w.name)} (${esc(w.id)})</option>`).join('')}</select>`
+        : `<input id="wsPick" placeholder="wrkspc_…" autocomplete="off" spellcheck="false" style="width:220px">`;
+      banner('err', `${esc(d.message)}
+        <div class="row" style="margin-top:8px">${pick}<button id="wsGo" class="primary">Connect</button></div>
+        <small>Claude Console → <a href="${esc(d.console_url || 'https://platform.claude.com/settings/workspaces')}" target="_blank" rel="noopener">Settings → Workspaces</a>, ID column.</small>`);
+      $('wsGo').onclick = async () => {
+        const ws = $('wsPick').value.trim();
+        if (!ws) return $('wsPick').focus();
+        const r2 = await connectVendor(on, key, ws);
+        if (r2.ok) banner('good', 'Connected.');
+        else { const d2 = (await r2.json()).detail; banner('err', typeof d2 === 'string' ? d2 : (d2.message || 'Connection failed')); }
+        load();
+      };
+      return;
+    }
+    banner('err', typeof d === 'string' ? d : (d.message || 'Connection failed'));
     load();
   }
   if (off){

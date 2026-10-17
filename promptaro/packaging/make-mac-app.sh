@@ -50,4 +50,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Promptaro.icns"
 touch "$APP"
 echo "Installed $APP"
 echo "Open it from Applications, Launchpad or Spotlight. Drag it to the Dock to keep it there."
+echo "The app isn't Apple-signed: if macOS says it's damaged or can't be opened, run"
+echo "  xattr -dr com.apple.quarantine \"$APP\""
+echo "or right-click it in Applications and choose Open."
 open -R "$APP" 2>/dev/null || true

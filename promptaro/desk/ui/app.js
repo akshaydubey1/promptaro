@@ -367,7 +367,7 @@ async function send() {
     input.value = ""; input.style.height = "auto";
     await api(`/api/sessions/${S.current}/messages`, { method: "POST", body: { text } });
     S.running = true; updateComposer();
-  } catch (e) { toast(e.message); }
+  } catch (e) { input.value = text; input.dispatchEvent(new Event("input")); toast(e.message); }   // keep the draft
 }
 $("stopBtn").onclick = () => S.current && api(`/api/sessions/${S.current}/stop`, { method: "POST" });
 $("modelPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { model: $("modelPick").value } });
