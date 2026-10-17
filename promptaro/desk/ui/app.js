@@ -687,6 +687,20 @@ document.addEventListener("click", (e) => {
   if (b) { navigator.clipboard.writeText(b.dataset.copytext); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); }
 });
 
+/* ---------------- answer details toggle ---------------- */
+/* Shows/hides the "model · Paid/Free · tokens · cost" line under each answer.
+   On by default; the choice persists across launches. */
+function applyDetailsPref() {
+  const on = localStorage.getItem("promptaro:modelInfo") !== "off";
+  $("app").classList.toggle("no-route-info", !on);
+  $("detailsDot").classList.toggle("on", on);
+  $("detailsBtn").classList.toggle("off", !on);
+}
+$("detailsBtn").onclick = () => {
+  localStorage.setItem("promptaro:modelInfo", localStorage.getItem("promptaro:modelInfo") === "off" ? "on" : "off");
+  applyDetailsPref();
+};
+
 /* ---------------- updates ---------------- */
 async function checkUpdate() {
   try {
@@ -716,5 +730,6 @@ setInterval(checkUpdate, 30000);
   if (q.get("connected")) toast("Signed in. Models are ready.");
   if (q.get("error")) toast(q.get("error"), 6000);
   if (q.toString()) history.replaceState(null, "", "/");
+  applyDetailsPref();
   await loadModels(); await loadSessions(); welcome(); connectStream(); checkUpdate(); loadSavings();
 })();
