@@ -9,7 +9,9 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
+from router import catalog
 from router.classifier import classify
 from router.context import fit_context
 from router.engine import Router, RunRequest
@@ -52,12 +54,24 @@ def make_router(tmp_path, monkeypatch, test_root):
     return _make
 
 
-def test_refresh_catalog_swaps_registry_off_critical_path(tmp_path, test_root):
-    """Startup builds cache-only; refresh_catalog() rebuilds with live lists in the background."""
-    r = Router(test_root, db_path=tmp_path / "t.db", use_catalog=False, refresh_catalog=False)
+def test_refresh_catalog_loads_fresh_models(tmp_path, test_root, monkeypatch):
+    """Startup builds cache-only; refresh_catalog() swaps in a registry built from the live list."""
+    cfg = yaml.safe_load((test_root / "config" / "models.yaml").read_text())
+    cfg["catalog"]["enabled"] = True
+    cfg["catalog"]["vendors"] = ["acme"]
+    (test_root / "config" / "models.yaml").write_text(yaml.safe_dump(cfg))
+    fresh = {"id": "acme/fresh-9", "name": "acme/fresh-9", "created": int(time.time()),
+             "context_length": 200000, "pricing": {"prompt": "0.000001", "completion": "0.000005"},
+             "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+             "supported_parameters": ["tools"]}
+    monkeypatch.setattr(catalog, "fetch_openrouter_models", lambda *a, **k: [fresh])
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
+
+    r = Router(test_root, db_path=tmp_path / "t.db", refresh_catalog=False)
+    assert "acme/fresh-9" not in r.registry.models           # cache-only build: nothing fresh yet
     old = r.registry
     asyncio.run(r.refresh_catalog())
-    assert r.registry is not old
+    assert r.registry is not old and "acme/fresh-9" in r.registry.models
 
 
 def run(r, **kw):

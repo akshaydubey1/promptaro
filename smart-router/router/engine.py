@@ -162,8 +162,9 @@ class Router:
         opens instantly; this finishes the real refresh in a worker thread."""
         try:
             await asyncio.to_thread(self.reload)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[router] model catalog refresh failed; keeping the cached list: {secrets.redact(e)}",
+                  flush=True)
 
     async def aclose(self) -> None:
         await self._client.aclose()
