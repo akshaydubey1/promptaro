@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -18,9 +19,9 @@ from typing import Callable
 
 import httpx
 
-from . import catalog, quota
+from . import catalog, quota, secrets
 from . import checks as ck
-from .classifier import TASK_TYPES, TaskProfile, classify
+from .classifier import TASK_TYPES, TaskProfile, classify, estimate_tokens, needs_for
 from .context import fit_context
 from .providers import Completion, Provider, ProviderError, build_providers
 from .registry import ModelSpec, Registry
@@ -117,10 +118,22 @@ class Router:
         self.run_code = bool(r.get("run_generated_code", True))
         quota.use(catalog.HOME / "ledger.json")
         self.usage_listeners: list = []          # called with (spec, tokens_in, tokens_out, cost, top_cost, source)
+        self._spend_cache = (0.0, 0.0)           # (refetch_at, today's spend) — budget check stays off the DB
+
+    def _daily_budget_left(self) -> float:
+        """Dollars still available today under the daily cap; inf when no cap is set."""
+        cap = float(catalog.get_settings().get("daily_budget_usd") or 0)
+        if cap <= 0:
+            return math.inf
+        now = time.time()
+        if now >= self._spend_cache[0]:
+            self._spend_cache = (now + 5, self.store.spend_today())
+        return max(0.0, cap - self._spend_cache[1])
 
     def notify_usage(self, spec, tin: int, tout: int, source: str = "gateway") -> None:
         """Tell the app about usage that didn't go through run() (e.g. the coding-tools gateway)."""
         cost = spec.cost(tin, tout)
+        self.store.add_spend(cost)
         paid = [m for m in self.registry.usable() if m.provider != "offline" and not m.extra.get("free")]
         top = max(paid, key=lambda m: (m.tier, m.price_out), default=None)
         top_cost = top.cost(tin, tout) if top else cost
@@ -149,35 +162,76 @@ class Router:
         """Everything decided locally before any model call. Timed for the <100ms target."""
         t0 = time.perf_counter()
         profile = classify(req.instruction, req.context, req.has_images)
+        ctx, ctx_info = fit_context(req.instruction, req.context, self.ctx_budget)
+        skills = self.skills.select(req.instruction, profile)
+        # Route on what will actually be sent (trimmed context + system + skills),
+        # not the raw instruction + context.
+        profile.est_input_tokens = (estimate_tokens(req.instruction) + estimate_tokens(ctx)
+                                    + estimate_tokens(BASE_SYSTEM) + estimate_tokens(req.system_extra)
+                                    + sum(s.tokens for s in skills))
+        if "long_context" in profile.needs and profile.est_input_tokens <= 100_000:
+            profile.needs.discard("long_context")        # trimming removed the need
         decision = route(self.registry, self.store, profile, prefer=req.prefer,
                          quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
                          force_model=req.force_model, allow_free=self._allow_free(req),
                          exclude=req.exclude, private=req.private)
-        skills = self.skills.select(req.instruction, profile)
-        ctx, ctx_info = fit_context(req.instruction, req.context, self.ctx_budget)
         return profile, decision, skills, ctx, ctx_info, (time.perf_counter() - t0) * 1000
+
+    def _secondary_pool(self, req: RunRequest, exclude_id: str | None = None) -> list[ModelSpec]:
+        """Models allowed to see this request's content for helper calls (classify, review).
+        Honors the same privacy/free rules as the primary choice."""
+        pool = [m for m in self.registry.usable() if m.provider != "offline" and m.id != exclude_id]
+        if req.private:
+            pool = [m for m in pool if not (m.extra.get("free") and m.extra.get("trains"))]
+        if not self._allow_free(req):
+            pool = [m for m in pool if not m.extra.get("free")]
+        return pool
 
     async def _maybe_llm_classify(self, req: RunRequest, profile: TaskProfile) -> TaskProfile:
         thr = float(self.registry.routing.get("llm_classifier_below_confidence", 0.0))
         if profile.confidence >= thr:
             return profile
-        cheap = sorted((m for m in self.registry.usable() if m.provider != "offline"),
-                       key=lambda m: m.price_in + m.price_out)
-        if not cheap:
+        pool = self._secondary_pool(req)
+        if not pool:
             return profile
-        m = cheap[0]
         sys_p = ("Classify the task. Reply with JSON only: {\"task_type\": one of "
                  f"{list(TASK_TYPES)}, \"complexity\": 0..1}}")
+        c = await self._secondary_call(min(pool, key=lambda m: m.price_in + m.price_out),
+                                       sys_p, req.instruction[:2000], 60, json_mode=True)
+        if c is None:
+            return profile
         try:
-            c = await self.providers[m.provider].complete(m, sys_p, req.instruction[:2000], 60, json_mode=True)
             d = json.loads(c.text[c.text.find("{"): c.text.rfind("}") + 1])
             if d.get("task_type") in TASK_TYPES:
                 profile.task_type = d["task_type"]
                 profile.complexity = float(d.get("complexity", profile.complexity))
                 profile.confidence = 0.9
+                # A changed task type needs different capability flags (tests, json, ...).
+                profile.needs = needs_for(profile.task_type, req.instruction, req.has_images,
+                                          profile.est_input_tokens)
         except Exception:
             pass
         return profile
+
+    async def _secondary_call(self, m: ModelSpec, system: str, user: str, max_out: int,
+                              **kw) -> Completion | None:
+        """One helper call (classify/review). Counts against the free-tier ledger
+        exactly like a primary call — secondary calls can't drain free quotas silently."""
+        res = None
+        if m.extra.get("quota"):
+            ok, _why, res = quota.LEDGER.begin(m, 1200)
+            if not ok:
+                return None
+        try:
+            c = await self.providers[m.provider].complete(m, system, user, max_out, **kw)
+            quota.LEDGER.settle(res, m, c.tokens_in + c.tokens_out, getattr(c, "headers", None))
+            if m.extra.get("free") and not m.extra.get("quota"):
+                catalog.FREE.note_used()
+            return c
+        except (ProviderError, httpx.HTTPError) as e:
+            quota.LEDGER.abandon(res)
+            quota.after_error(m, e)
+            return None
 
     # ------------------------------------------------------------------- run
     def refresh_free_quota(self) -> None:
@@ -218,7 +272,9 @@ class Router:
             ("\n\n" + "\n\n".join(s.body for s in skills) if skills else "")
         user = req.instruction if not ctx else f"{req.instruction}\n\n<context>\n{ctx}\n</context>"
 
-        key = Store.cache_key(req.instruction, ctx, req.tests or "", profile.task_type)
+        key = Store.cache_key(req.instruction, ctx, req.tests or "", profile.task_type,
+                              req.system_extra, req.prefer, str(req.quality_target or ""),
+                              str(req.has_images))
         if req.use_cache and not req.force_model:
             hit = self.store.cache_get(key, self.cache_ttl)
             if hit:
@@ -229,20 +285,30 @@ class Router:
         max_out = min(int(self.registry.defaults.get("max_output_tokens", 4096)),
                       int(_OUT_BUDGET.get(profile.task_type, 1000) * (0.8 + 1.6 * profile.complexity)))
         ladder = [decision.primary] + trim_ladder(decision.ladder, self.max_attempts - 1)
+        # The effective cap is whichever binds first: this request's cap, or the daily budget.
+        budget_cap = req.max_cost_usd if req.max_cost_usd is not None else math.inf
+        budget_cap = min(budget_cap, self._daily_budget_left())
         spent = 0.0
         feedback = ""
         best: tuple[float, str, str] | None = None   # (score, text, model)
+        blocked_by_budget = False
 
         for i, cand in enumerate(ladder):
             m: ModelSpec = cand.model
-            if req.max_cost_usd is not None and spent + cand.est_cost > req.max_cost_usd and i > 0:
-                break
+            if m.id != req.force_model and spent + cand.est_cost > budget_cap:
+                blocked_by_budget = True
+                continue                                 # hard budget: try a cheaper rung, else stop
             free = bool(m.extra.get("free"))
             if free and not m.extra.get("quota") and not catalog.FREE.available() and m.id != req.force_model:
                 continue
-            if m.extra.get("quota") and m.id != req.force_model and \
-                    not quota.LEDGER.allow(m, profile.est_input_tokens + max_out // 2)[0]:
-                continue
+            res = None
+            if m.extra.get("quota"):
+                ok, _why, res = quota.LEDGER.begin(m, profile.est_input_tokens + max_out // 2)
+                if not ok:
+                    # Forced or last-choice model: still accounted — don't bypass the ledger.
+                    result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0,
+                                                   error=f"free-tier limit reached: {_why}"))
+                    continue                             # limit reached between routing and send
             prompt = user if not feedback else f"{user}\n\n{feedback}"
             prov = self.providers[m.provider]
             kw = dict(json_mode="json" in profile.needs, web="web" in profile.needs)
@@ -252,18 +318,21 @@ class Router:
                     comp = await prov.stream(m, system, prompt, max_out, lambda t, n=n: on_delta(n, t), **kw)
                 else:
                     comp = await prov.complete(m, system, prompt, max_out, **kw)
+                quota.LEDGER.settle(res, m, comp.tokens_in + comp.tokens_out, comp.headers)
+                res = None
                 self.registry.breaker.record(m.id, True)
-                quota.after_call(m, comp)
                 if free and not m.extra.get("quota"):
                     catalog.FREE.note_used()
             except (ProviderError, httpx.HTTPError) as e:
+                quota.LEDGER.abandon(res)
                 if quota.after_error(m, e):
                     pass                                     # free-tier refusal: paused, move on
                 elif free and "429" in str(e):
                     catalog.FREE.note_rate_limited(str(e))     # not the model's fault: don't trip the breaker
                 else:
                     self.registry.breaker.record(m.id, False)
-                result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0, error=str(e)[:300]))
+                result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0,
+                                               error=secrets.redact(str(e))[:300]))
                 if i == len(ladder) - 1 and free:
                     # The last option was a free model that refused: try once more without free models.
                     retry = route(self.registry, self.store, profile, prefer=req.prefer,
@@ -273,18 +342,23 @@ class Router:
                         ladder.append(retry.primary)
                 continue
 
-            cost = m.cost(comp.tokens_in, comp.tokens_out)
+            cost = m.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             spent += cost
-            chk = ck.run_checks(profile, req.instruction, comp.text, comp.stop_reason, req.tests, self.run_code)
+            self.store.add_spend(cost)
+            # Checks can run pytest (subprocess): keep them off the event loop.
+            chk = await asyncio.to_thread(ck.run_checks, profile, req.instruction, comp.text,
+                                          comp.stop_reason, req.tests, self.run_code)
             att = Attempt(m.id, chk.passed, chk.score, chk.reasons, comp.tokens_in, comp.tokens_out,
                           cost, comp.latency_ms)
             result.attempts.append(att)
 
             if chk.passed and self._should_review(req, profile, m):
-                ok, issues, rev = await self._review(req, m, comp.text)
+                left = (budget_cap - spent) if math.isfinite(budget_cap) else None
+                ok, issues, rev = await self._review(req, m, comp.text, budget_left=left)
                 if rev:
                     result.attempts.append(rev)
                     spent += rev.cost_usd
+                    self.store.add_spend(rev.cost_usd)
                 if not ok:
                     chk.passed = False
                     chk.reasons = ["cross-review: " + x for x in issues] or ["cross-review rejected"]
@@ -312,6 +386,13 @@ class Router:
 
         if not result.passed and best:
             result.output, result.model = best[1], best[2]
+        elif not result.attempts and blocked_by_budget:
+            cap = float(catalog.get_settings().get("daily_budget_usd") or 0)
+            result.output = (f"Stopped before spending: today's ${cap:.2f} budget is used up. "
+                             "Free models may still work; raise the daily cap in Connections."
+                             if cap and budget_cap <= 0 else
+                             f"Stopped before spending: no suitable model fits the remaining "
+                             f"${budget_cap:.4f} budget.")
         result.total_ms = (time.perf_counter() - t_start) * 1000
         return result
 
@@ -327,18 +408,20 @@ class Router:
         return profile.complexity >= float(self.registry.routing.get("cross_review_complexity", 0.75)) \
             and not verified_by_tests
 
-    async def _review(self, req: RunRequest, author: ModelSpec, text: str) -> tuple[bool, list[str], Attempt | None]:
-        pool = [m for m in self.registry.usable() if m.id != author.id and m.provider != "offline"]
+    async def _review(self, req: RunRequest, author: ModelSpec, text: str,
+                      budget_left: float | None = None) -> tuple[bool, list[str], Attempt | None]:
+        pool = self._secondary_pool(req, exclude_id=author.id)
         if not pool:
             return True, [], None
         other = [m for m in pool if m.provider != author.provider] or pool
         reviewer = min(other, key=lambda m: (m.price_in + m.price_out, -m.tier))
+        if budget_left is not None and reviewer.cost(4200, 300) > budget_left:
+            return True, [], None                            # can't afford a review within the cap
         msg = f"TASK:\n{req.instruction[:4000]}\n\nRESPONSE:\n{text[:12000]}"
-        try:
-            c: Completion = await self.providers[reviewer.provider].complete(reviewer, ck.REVIEW_SYSTEM, msg, 300,
-                                                                             json_mode=True)
-        except (ProviderError, httpx.HTTPError) as e:
-            return True, [], Attempt(reviewer.id, True, 0, [], 0, 0, 0, 0, kind="review", error=str(e)[:200])
+        c: Completion | None = await self._secondary_call(reviewer, ck.REVIEW_SYSTEM, msg, 300, json_mode=True)
+        if c is None:
+            return True, [], Attempt(reviewer.id, True, 0, [], 0, 0, 0, 0, kind="review",
+                                     error="review call unavailable")
         score, issues = ck.parse_review(c.text)
         cost = reviewer.cost(c.tokens_in, c.tokens_out)
         return score >= 7, issues, Attempt(reviewer.id, score >= 7, score / 10, issues, c.tokens_in,

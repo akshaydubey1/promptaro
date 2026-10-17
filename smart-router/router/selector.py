@@ -197,9 +197,13 @@ def route(reg: Registry, store: Store, profile: TaskProfile, *, prefer: str = "b
 
 
 def trim_ladder(ladder: list[Candidate], slots: int) -> list[Candidate]:
-    """Keep the next step(s) up but always end with the strongest option."""
+    """Keep the next step(s) up but always end with the strongest option (no duplicates)."""
     if slots <= 0:
         return []
     if len(ladder) <= slots:
         return ladder
-    return ladder[: slots - 1] + [max(ladder, key=lambda c: c.quality)]
+    head = ladder[: slots - 1]
+    top = max(ladder, key=lambda c: c.quality)
+    if any(c.model.id == top.model.id for c in head):
+        return head
+    return head + [top]

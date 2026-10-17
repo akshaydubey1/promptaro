@@ -15,7 +15,9 @@ never sent to a model whose free tier allows 8k tokens a minute.
 """
 from __future__ import annotations
 
+import calendar
 import json
+import os
 import re
 import threading
 import time
@@ -36,6 +38,13 @@ def _month() -> str:
 def _to_midnight() -> float:
     t = time.gmtime()
     return 86400 - (t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec)
+
+
+def _to_month_end() -> float:
+    """Seconds until the first day of next month, UTC."""
+    t = time.gmtime()
+    y, m = (t.tm_year, t.tm_mon + 1) if t.tm_mon < 12 else (t.tm_year + 1, 1)
+    return calendar.timegm((y, m, 1, 0, 0, 0, 0, 0, 0)) - time.time()
 
 
 _DUR = re.compile(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$")
@@ -88,8 +97,14 @@ class Ledger:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps({"day": self.day, "month": self.month, "daily": self.daily,
-                                             "monthly": self.monthly, "paused": self.paused}))
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(json.dumps({"day": self.day, "month": self.month, "daily": self.daily,
+                                       "monthly": self.monthly, "paused": self.paused}))
+            os.replace(tmp, self.path)                      # atomic: a crash never leaves a half-written ledger
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
         except OSError:
             pass
 
@@ -122,39 +137,98 @@ class Ledger:
         return len(q), sum(t for _, t in q)
 
     # -------------------------------------------------------------- checks
+    def _check(self, spec, est_tokens: int) -> tuple[bool, str]:
+        """Read-only limit check. Caller holds self.lock."""
+        sc = self.scope(spec)
+        lim = self.limits(spec)
+        label = FREE_PROVIDERS[spec.extra["quota"]].label
+        until, why = self.paused.get(sc, (0, ""))
+        if until > time.time():
+            reason = {"daily": "daily limit reached", "monthly": "monthly limit reached"}.get(why,
+                                                                                              "is rate-limiting")
+            return False, f"{label} {reason}"
+        req_m, tok_m = self._minute(sc)
+        day = self.daily.get(sc, [0, 0])
+        mon = self.monthly.get(sc, [0, 0])
+        if lim.get("tpm") and est_tokens > lim["tpm"]:
+            return False, f"request too large for {label}'s free tier ({lim['tpm']:,} tokens a minute)"
+        if lim.get("rpm") and req_m >= lim["rpm"]:
+            return False, f"{label} per-minute limit reached"
+        if lim.get("tpm") and tok_m + est_tokens > lim["tpm"]:
+            return False, f"{label} per-minute token limit reached"
+        if lim.get("rpd") and day[0] >= lim["rpd"]:
+            return False, f"{label} daily limit reached"
+        if lim.get("tpd") and day[1] + est_tokens > lim["tpd"]:
+            return False, f"{label} daily token limit reached"
+        if lim.get("rpmonth") and mon[0] >= lim["rpmonth"]:
+            return False, f"{label} monthly limit reached"
+        live = self.live.get(sc, {})
+        if live.get("requests_left") == 0 and live.get("requests_reset_at", 0) > time.time():
+            return False, f"{label} limit reached (provider says)"
+        if live.get("tokens_left") is not None and live.get("tokens_reset_at", 0) > time.time() \
+                and est_tokens > live["tokens_left"]:
+            return False, f"{label} token limit reached (provider says)"
+        return True, ""
+
     def allow(self, spec, est_tokens: int = 0) -> tuple[bool, str]:
         sc = self.scope(spec)
         if not sc:
             return True, ""
         with self.lock:
             self._roll()
-            lim = self.limits(spec)
-            label = FREE_PROVIDERS[spec.extra["quota"]].label
-            until, why = self.paused.get(sc, (0, ""))
-            if until > time.time():
-                return False, f"{label} {'daily limit reached' if why == 'daily' else 'is rate-limiting'}"
-            req_m, tok_m = self._minute(sc)
-            day = self.daily.get(sc, [0, 0])
-            mon = self.monthly.get(sc, [0, 0])
-            if lim.get("tpm") and est_tokens > lim["tpm"]:
-                return False, f"request too large for {label}'s free tier ({lim['tpm']:,} tokens a minute)"
-            if lim.get("rpm") and req_m >= lim["rpm"]:
-                return False, f"{label} per-minute limit reached"
-            if lim.get("tpm") and tok_m + est_tokens > lim["tpm"]:
-                return False, f"{label} per-minute token limit reached"
-            if lim.get("rpd") and day[0] >= lim["rpd"]:
-                return False, f"{label} daily limit reached"
-            if lim.get("tpd") and day[1] + est_tokens > lim["tpd"]:
-                return False, f"{label} daily token limit reached"
-            if lim.get("rpmonth") and mon[0] >= lim["rpmonth"]:
-                return False, f"{label} monthly limit reached"
-            live = self.live.get(sc, {})
-            if live.get("requests_left") == 0 and live.get("requests_reset_at", 0) > time.time():
-                return False, f"{label} limit reached (provider says)"
-            if live.get("tokens_left") is not None and live.get("tokens_reset_at", 0) > time.time() \
-                    and est_tokens > live["tokens_left"]:
-                return False, f"{label} token limit reached (provider says)"
-            return True, ""
+            return self._check(spec, est_tokens)
+
+    # ----------------------------------------------------- reservations
+    # A request counts against the free tier while it is in flight, not just
+    # after it lands: concurrent requests see each other's usage. begin()
+    # reserves (request + estimated tokens); settle() swaps the estimate for
+    # the real usage; abandon() refunds a request that never reached the model.
+    def begin(self, spec, est_tokens: int = 0) -> tuple[bool, str, dict | None]:
+        sc = self.scope(spec)
+        if not sc:
+            return True, "", None
+        with self.lock:
+            self._roll()
+            ok, why = self._check(spec, est_tokens)
+            if not ok:
+                return False, why, None
+            self.minute.setdefault(sc, deque()).append((time.time(), est_tokens))
+            d = self.daily.setdefault(sc, [0, 0])
+            d[0], d[1] = d[0] + 1, d[1] + est_tokens
+            mo = self.monthly.setdefault(sc, [0, 0])
+            mo[0], mo[1] = mo[0] + 1, mo[1] + est_tokens
+            self._save()
+            return True, "", {"scope": sc, "est": est_tokens}
+
+    def settle(self, res: dict | None, spec, tokens: int, headers: dict | None = None) -> None:
+        """Reservation finished: correct the estimate with real usage + fresh rate-limit headers."""
+        if not res:
+            return
+        sc = res["scope"]
+        with self.lock:
+            self._roll()
+            delta = tokens - res["est"]
+            if sc in self.daily:
+                self.daily[sc][1] += delta
+            if sc in self.monthly:
+                self.monthly[sc][1] += delta
+            if headers:
+                self._note_headers(sc, spec, headers)
+            self._save()
+
+    def abandon(self, res: dict | None) -> None:
+        """The call never completed (error/cancel): refund the request and token counts.
+        The per-minute entry stays — a refused request still consumed provider-side slots."""
+        if not res:
+            return
+        sc = res["scope"]
+        with self.lock:
+            self._roll()
+            for table in (self.daily, self.monthly):
+                if sc in table:
+                    table[sc][0] = max(0, table[sc][0] - 1)
+                    table[sc][1] = max(0, table[sc][1] - res["est"])
+            self._save()
 
     def wait_for(self, spec, est_tokens: int = 0) -> float | None:
         """Seconds until this model can take the request, if only a per-minute window is in the way.
@@ -163,6 +237,7 @@ class Ledger:
         if not sc:
             return 0.0
         with self.lock:
+            self._roll()
             lim = self.limits(spec)
             if lim.get("tpm") and est_tokens > lim["tpm"]:
                 return None
@@ -183,11 +258,35 @@ class Ledger:
             return wait
 
     # ------------------------------------------------------------- updates
+    def _note_headers(self, sc: str, spec, headers: dict) -> None:
+        """Trust the provider's own rate-limit headers over our counters. Caller holds self.lock."""
+        p = FREE_PROVIDERS[spec.extra["quota"]]
+        h = {k.lower(): v for k, v in headers.items()}
+        live = self.live.setdefault(sc, {})
+        now = time.time()
+        for kind, unit in (("requests", p.header_requests), ("tokens", p.header_tokens)):
+            left = h.get(f"x-ratelimit-remaining-{kind}")
+            if left is None:
+                continue
+            try:
+                live[f"{kind}_left"] = int(float(left))
+            except ValueError:
+                continue
+            reset = parse_reset(h.get(f"x-ratelimit-reset-{kind}"))
+            live[f"{kind}_reset_at"] = now + (reset if reset is not None else (60 if unit == "minute" else _to_midnight()))
+            live[f"{kind}_unit"] = unit
+            lim = h.get(f"x-ratelimit-limit-{kind}")
+            if lim:
+                try:
+                    live[f"{kind}_limit"] = int(float(lim))
+                except ValueError:
+                    pass
+
     def record(self, spec, tokens: int, headers: dict | None = None) -> None:
+        """Count a completed call that wasn't reserved first (kept for one-shot callers)."""
         sc = self.scope(spec)
         if not sc:
             return
-        p = FREE_PROVIDERS[spec.extra["quota"]]
         with self.lock:
             self._roll()
             self.minute.setdefault(sc, deque()).append((time.time(), tokens))
@@ -196,26 +295,7 @@ class Ledger:
             mo = self.monthly.setdefault(sc, [0, 0])
             mo[0], mo[1] = mo[0] + 1, mo[1] + tokens
             if headers:
-                h = {k.lower(): v for k, v in headers.items()}
-                live = self.live.setdefault(sc, {})
-                now = time.time()
-                for kind, unit in (("requests", p.header_requests), ("tokens", p.header_tokens)):
-                    left = h.get(f"x-ratelimit-remaining-{kind}")
-                    if left is None:
-                        continue
-                    try:
-                        live[f"{kind}_left"] = int(float(left))
-                    except ValueError:
-                        continue
-                    reset = parse_reset(h.get(f"x-ratelimit-reset-{kind}"))
-                    live[f"{kind}_reset_at"] = now + (reset if reset is not None else (60 if unit == "minute" else _to_midnight()))
-                    live[f"{kind}_unit"] = unit
-                    lim = h.get(f"x-ratelimit-limit-{kind}")
-                    if lim:
-                        try:
-                            live[f"{kind}_limit"] = int(float(lim))
-                        except ValueError:
-                            pass
+                self._note_headers(sc, spec, headers)
             self._save()
 
     def refused(self, spec, retry_after: float | None = None, message: str = "") -> None:
@@ -230,7 +310,7 @@ class Ledger:
             if daily:
                 self.paused[sc] = (time.time() + _to_midnight(), "daily")
             elif "month" in msg:
-                self.paused[sc] = (time.time() + 7 * 86400, "monthly")
+                self.paused[sc] = (time.time() + min(_to_month_end(), 45 * 86400), "monthly")
             else:
                 wait = retry_after if retry_after and retry_after > 0 else 60
                 self.paused[sc] = (time.time() + min(wait, 3600), "minute")
@@ -292,7 +372,13 @@ def after_error(spec, err: Exception) -> bool:
         return False
     status = getattr(err, "status", None)
     text = str(err)
-    if status in (429, 413) or " 429" in text or "rate limit" in text.lower():
+    if status in (429, 413):
+        LEDGER.refused(spec, getattr(err, "retry_after", None), text)
+        return True
+    # Some providers wrap limit errors in a 400: only trust limit-shaped text when
+    # the status is unknown or plausibly a refusal — never on a plain 5xx.
+    if status in (None, 400, 402, 403) and re.search(
+            r"\b429\b|rate.?limit|resource.?exhausted|quota|too (many|large)", text.lower()):
         LEDGER.refused(spec, getattr(err, "retry_after", None), text)
         return True
     return False

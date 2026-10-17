@@ -120,9 +120,15 @@ class AnthropicProvider(Provider):
 
     async def stream(self, spec, system, user, max_tokens, on_delta, *, json_mode=False, web=False,
                      timeout_s=120, messages=None):
+        msgs = [dict(m) for m in (messages or [{"role": "user", "content": user}])]
+        if messages:
+            # Same cache breakpoint as complete(): the conversation prefix is billed
+            # at the cached-input rate on the next turn.
+            last = msgs[-1]
+            last["content"] = [{"type": "text", "text": last["content"], "cache_control": {"type": "ephemeral"}}]
         body = {"model": spec.model, "max_tokens": max_tokens, "stream": True,
                 "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                "messages": [dict(m) for m in (messages or [{"role": "user", "content": user}])]}
+                "messages": msgs}
         if web and "web" in spec.capabilities:
             body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
         headers = {**secrets.anthropic_headers(secrets.get(spec.api_key_env)), "content-type": "application/json"}
@@ -158,6 +164,17 @@ class OpenAIProvider(Provider):
     def __init__(self, client: httpx.AsyncClient, compatible: bool = False):
         self.client, self.compatible = client, compatible
 
+    async def _headers(self, spec, base: str) -> dict:
+        """Request headers for one call. Async so token-exchange providers can refresh."""
+        headers = {"content-type": "application/json"}
+        key = secrets.get(spec.api_key_env) if spec.api_key_env else ""
+        if key:
+            headers["authorization"] = f"Bearer {key}"
+        if "openrouter.ai" in base:
+            headers["HTTP-Referer"] = "http://localhost"
+            headers["X-Title"] = "Promptaro"
+        return headers
+
     async def complete(self, spec, system, user, max_tokens, *, json_mode=False, web=False, timeout_s=120,
                        messages=None):
         base = (spec.base_url or self.URL).rstrip("/")
@@ -167,13 +184,7 @@ class OpenAIProvider(Provider):
         body["max_tokens" if self.compatible else "max_completion_tokens"] = max_tokens
         if json_mode:
             body["response_format"] = {"type": "json_object"}
-        headers = {"content-type": "application/json"}
-        key = secrets.get(spec.api_key_env) if spec.api_key_env else ""
-        if key:
-            headers["authorization"] = f"Bearer {key}"
-        if "openrouter.ai" in base:
-            headers["HTTP-Referer"] = "http://localhost"
-            headers["X-Title"] = "Akshay Smart Router"
+        headers = await self._headers(spec, base)
         t0 = time.perf_counter()
         r = await self.client.post(f"{base}/chat/completions", json=body, headers=headers, timeout=timeout_s)
         _raise_for(r, spec.provider)
@@ -196,13 +207,7 @@ class OpenAIProvider(Provider):
         body: dict = {"model": spec.model, "messages": [{"role": "system", "content": system}, *convo],
                       "stream": True, "stream_options": {"include_usage": True}}
         body["max_tokens" if self.compatible else "max_completion_tokens"] = max_tokens
-        headers = {"content-type": "application/json"}
-        key = secrets.get(spec.api_key_env) if spec.api_key_env else ""
-        if key:
-            headers["authorization"] = f"Bearer {key}"
-        if "openrouter.ai" in base:
-            headers["HTTP-Referer"] = "http://localhost"
-            headers["X-Title"] = "Akshay Smart Router"
+        headers = await self._headers(spec, base)
         t0 = time.perf_counter()
         parts, tin, tout, cached, stop = [], 0, 0, 0, ""
         async with self.client.stream("POST", f"{base}/chat/completions", json=body, headers=headers,

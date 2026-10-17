@@ -138,6 +138,7 @@ def client(fake_catalog, monkeypatch, tmp_path):
     monkeypatch.setattr(connect.httpx, "AsyncClient", FakeAsyncClient)
     from router import api
     with TestClient(api.app) as c:
+        c.headers.update({"x-promptaro": "1"})       # the app's own calls carry the CSRF header
         yield c
 
 
