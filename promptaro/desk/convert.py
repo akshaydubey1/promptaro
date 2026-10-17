@@ -77,16 +77,9 @@ _UNI_FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
 )
-_uni_font_name: str | None | bool = None        # None = not probed yet
-
-
-def _uni_font() -> str | None:
-    """A wide-coverage TTF already on the system, registered once with reportlab.
-    Without one, non-Latin text (Hindi, CJK, emoji) can't render in a PDF."""
-    global _uni_font_name
-    if _uni_font_name is not None:
-        return _uni_font_name or None
-    _uni_font_name = False
+def _uni_font(needed: set[int]) -> str | None:
+    """Register a system TTF that actually covers every codepoint in `needed`
+    (a font that merely exists would still render missing glyphs as boxes)."""
     try:
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
@@ -95,9 +88,10 @@ def _uni_font() -> str | None:
     for cand in _UNI_FONT_CANDIDATES:
         if Path(cand).is_file():
             try:
-                pdfmetrics.registerFont(TTFont("UniSans", cand))
-                _uni_font_name = "UniSans"
-                return "UniSans"
+                f = TTFont("UniSans", cand)
+                if needed <= set(f.face.charToGlyph):
+                    pdfmetrics.registerFont(f)
+                    return "UniSans"
             except Exception:
                 continue
     return None
@@ -114,7 +108,8 @@ def _text_pdf(text: str, title: str = "") -> BytesIO:
     than failing the whole export."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
-    font = _uni_font() if any(ord(ch) > 255 for ch in (title + text)) else None
+    needed = {ord(ch) for ch in (title + text) if ord(ch) > 255}
+    font = _uni_font(needed) if needed else None
     body_font = font or "Helvetica"
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)

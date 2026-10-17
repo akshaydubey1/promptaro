@@ -487,7 +487,7 @@ def test_text_pdf_handles_unicode(tmp_path):
     txt.write_text("नमस्ते दुनिया — hello world")
     out = convert.make_pdf([txt], tmp_path / "out.pdf")
     assert out.read_bytes()[:5] == b"%PDF-"
-    if convert._uni_font():                       # a wide-coverage font exists on this machine
+    if convert._uni_font({ord(c) for c in "नमस्ते"}):   # a covering font exists on this machine
         from pypdf import PdfReader
         got = "\n".join(pg.extract_text() or "" for pg in PdfReader(str(out)).pages)
         assert "नमस्ते" in got
