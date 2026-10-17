@@ -25,7 +25,7 @@ if str(ROUTER_ROOT) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -163,11 +163,18 @@ class NewChat(BaseModel):
     title: str = "New chat"
     prefer: Literal["balanced", "cheap", "fast", "best"] = "balanced"
     model: str = ""
+    project: str = ""                    # bind the chat to a folder: the model can read it for context
 
 
 @app.post("/api/sessions")
 async def new_chat(b: NewChat):
-    return desk.store.create("chat", b.title, prefer=b.prefer, model=b.model)
+    fields = {"prefer": b.prefer, "model": b.model}
+    if b.project.strip():
+        root = Path(b.project.strip()).expanduser()
+        if not root.is_dir():
+            raise HTTPException(400, "That folder doesn't exist. Choose a real project folder.")
+        fields["project"] = str(root.resolve())
+    return desk.store.create("chat", b.title, **fields)
 
 
 @app.get("/api/sessions/{sid}")
@@ -208,6 +215,68 @@ async def delete_session(sid: str):
         await gitops.discard(s["repo"], s["worktree"], s["branch"])
     desk.store.delete(sid)
     return {"ok": True}
+
+
+def export_markdown(s: dict, events: list[dict]) -> str:
+    """The whole conversation as Markdown — questions, answers, and an agent's work steps."""
+    verb = {"list_files": "Listed", "read_file": "Read", "search": "Searched",
+            "write_file": "Wrote", "edit_file": "Edited", "run": "Ran"}
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s.get("created") or 0))
+    head = [f"# {s['title']}", "",
+            f"_{s['kind'].capitalize()} · started {when} · "
+            f"{(s.get('tokens_in') or 0) + (s.get('tokens_out') or 0)} tokens · ${s.get('cost') or 0:.4f}_", ""]
+    if s.get("project"):
+        head.insert(2, f"_Project: {s['project']}_")
+        head.insert(3, "")
+    steps: list[str] = []
+
+    def flush() -> None:
+        if steps:
+            head.extend(("<details><summary>Work steps</summary>", "", *steps, "</details>", ""))
+            steps.clear()
+
+    for ev in events:
+        d = ev["data"] or {}
+        if ev["kind"] == "user":
+            flush()
+            head += ["## You", "", d.get("text", ""), ""]
+        elif ev["kind"] == "assistant":
+            flush()
+            who = d.get("name") or d.get("model") or "Assistant"
+            bits = [who, "Free" if d.get("free") else "Paid"]
+            if d.get("tokens_in") or d.get("tokens_out"):
+                bits.append(f"{(d.get('tokens_in') or 0) + (d.get('tokens_out') or 0)} tokens")
+            if d.get("cost"):
+                bits.append(f"${d['cost']:.4f}")
+            head += [f"## {' · '.join(bits)}", "", d.get("text", ""), ""]
+        elif ev["kind"] == "tool_call":
+            args = d.get("args") or {}
+            tgt = args.get("command") or args.get("path") or args.get("pattern") or ""
+            steps.append(f"- {verb.get(d.get('action'), d.get('action', '?'))} {tgt}".rstrip())
+        elif ev["kind"] == "thought":
+            steps.append(f"  - _{d.get('text', '')[:300]}_")
+        elif ev["kind"] == "finish":
+            flush()
+            if d.get("summary"):
+                head += ["## Summary", "", d["summary"], ""]
+        elif ev["kind"] in ("note", "error", "workspace", "git"):
+            flush()
+            head.append(f"> {d.get('text') or d.get('summary') or ''}")
+            head.append("")
+    flush()
+    return "\n".join(head) + "\n"
+
+
+@app.get("/api/sessions/{sid}/export")
+async def export_session(sid: str, format: Literal["md", "json"] = "md"):
+    s = _s(sid)
+    slug = "".join(c if c.isalnum() else "-" for c in s["title"].lower()).strip("-")[:60] or sid
+    events = desk.store.events(sid)
+    if format == "json":
+        return JSONResponse({"session": s, "events": events},
+                            headers={"content-disposition": f'attachment; filename="promptaro-{slug}.json"'})
+    return Response(export_markdown(s, events), media_type="text/markdown",
+                    headers={"content-disposition": f'attachment; filename="promptaro-{slug}.md"'})
 
 
 class Msg(BaseModel):
@@ -442,11 +511,17 @@ async def models():
     reg = desk.router.registry
     usable = {m.id for m in reg.usable()}
     st = await subs()
-    extra = [{"id": mid, "name": name, "via": "subscription", "tier": 3, "free": False, "subscription": True,
-              "price_in": 0, "price_out": 0}
-             for mid, key, name in (("claude-code", "claude_code", "Claude Code (your Claude subscription)"),
-                                    ("codex", "codex", "Codex (your ChatGPT subscription)"))
-             if st[key]["subscription"]]
+    from .workers import MODEL_CHOICES
+    extra = []
+    for mid, key, name in (("claude-code", "claude_code", "Claude Code (your Claude subscription)"),
+                           ("codex", "codex", "Codex (your ChatGPT subscription)")):
+        if not st[key]["subscription"]:
+            continue
+        entry = {"via": "subscription", "tier": 3, "free": False, "subscription": True,
+                 "price_in": 0, "price_out": 0}
+        extra.append({"id": mid, "name": name, **entry})
+        for vid, vlabel in MODEL_CHOICES.get(key, {}).items():     # per-model picks under the same plan
+            extra.append({"id": f"{mid}:{vid}", "name": f"{vlabel} (subscription)", **entry})
     return extra + [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""), "tier": m.tier,
              "free": bool(m.extra.get("free")), "vendor": m.extra.get("vendor", ""),
              "price_in": round(m.price_in, 3), "price_out": round(m.price_out, 3)}

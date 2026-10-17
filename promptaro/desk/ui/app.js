@@ -47,12 +47,30 @@ document.addEventListener("click", (e) => {
 async function loadSessions() { S.sessions = await api("/api/sessions"); renderSide(); }
 function renderSide() {
   const agents = S.sessions.filter((s) => s.kind === "agent"), chats = S.sessions.filter((s) => s.kind === "chat");
-  const row = (s) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}</li>`;
+  const row = (s) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${s.project ? `<span class="sub"> · ${esc(s.project.split(/[\\/]/).filter(Boolean).pop() || "")}</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
   $("agentList").innerHTML = agents.map(row).join("") || `<li class="empty-note">No agents yet</li>`;
   $("chatList").innerHTML = chats.map(row).join("") || `<li class="empty-note">No chats yet</li>`;
 }
 const statusText = (s) => ({ running: "Working", waiting: "Needs your approval", review: "Ready for review", done: "Merged", discarded: "Discarded", stopped: "Stopped", idle: "Idle" }[s] || s);
-$("side").addEventListener("click", (e) => { const li = e.target.closest("[data-sid]"); if (li) { openSession(li.dataset.sid); $("side").classList.remove("open"); } });
+$("side").addEventListener("click", async (e) => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    const s = S.sessions.find((x) => x.id === del.dataset.del);
+    if (!confirm(s?.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
+    try { await deleteSession(del.dataset.del); } catch (err) { toast(err.message); }
+    return;
+  }
+  const li = e.target.closest("[data-sid]"); if (li) { openSession(li.dataset.sid); $("side").classList.remove("open"); }
+});
+async function deleteSession(sid) {
+  await api(`/api/sessions/${sid}`, { method: "DELETE" });
+  if (sid === S.current) closeView();
+  loadSessions();
+}
+function closeView() {
+  S.current = null; S.session = null; S.running = false;
+  $("title").textContent = "Promptaro"; inputHint(); renderSide(); renderTop(); closeReview(); welcome();
+}
 $("menu").onclick = () => $("side").classList.toggle("open");
 
 /* ---------------- models ---------------- */
@@ -114,6 +132,7 @@ async function welcome() {
     <div class="starters">
       <button class="starter" data-start="agent"><b>Start an agent on a repo</b><span>It reads the code, makes the change, runs your tests, and waits for your review.</span></button>
       <button class="starter" data-start="chat"><b>Ask a question</b><span>Every answer shows which model answered and why.</span></button>
+      <button class="starter" data-start="projchat"><b>Chat about a project</b><span>Bind a folder — the model reads your code to answer, and can't change it.</span></button>
     </div>
     <div class="suggest">${SUGGEST.map((q) => `<button class="chip" data-suggest="${esc(q)}">${esc(q)}</button>`).join("")}</div>
     <div class="legend" aria-label="Track colors"><span><i style="background:var(--t1)"></i>Small or free model</span><span><i style="background:var(--t2)"></i>Medium model</span><span><i style="background:var(--t3)"></i>Large model or your subscription</span></div>
@@ -155,6 +174,7 @@ $("thread").addEventListener("click", async (e) => {
   if (sg) { input.value = sg.dataset.suggest; input.focus(); input.dispatchEvent(new Event("input")); return; }
   const st = e.target.closest("[data-start]"); if (!st) return;
   if (st.dataset.start === "agent") openAgentDialog();
+  if (st.dataset.start === "projchat") openProjChat();
   if (st.dataset.start === "chat") $("input").focus();
   if (st.dataset.start === "connect") openConnections();
   if (st.dataset.start === "free") openConnections().then(() => $("freeHead")?.scrollIntoView({ block: "start" }));
@@ -334,7 +354,8 @@ async function openSession(sid) {
   r.events.forEach(renderEvent);
   if (S.running) showThinking();
   $("modelPick").value = r.session.model || ""; $("preferPick").value = r.session.prefer || "balanced";
-  $("input").placeholder = r.session.kind === "agent" ? "Tell the agent something (it reads it at its next step)" : "Message";
+  $("input").placeholder = r.session.kind === "agent" ? "Tell the agent something (it reads it at its next step)"
+    : r.session.project ? "Ask about this project — the model can read its files" : "Message";
   renderTop(); updateComposer(); scrollDown();
   if (r.session.kind !== "agent") closeReview();
   else if (!$("review").classList.contains("hidden")) openReview();
@@ -342,18 +363,22 @@ async function openSession(sid) {
 function renderTop() {
   const s = S.session; if (!s) { $("topTools").innerHTML = ""; return; }
   $("topTools").innerHTML = (s.kind === "agent" ? `<span>${esc(statusText(s.status))}</span><button class="btn" data-top="review">Changes</button>` : "") +
+    (s.project ? `<span title="${esc(s.project)}">📁 ${esc(s.project.split(/[\\/]/).filter(Boolean).pop() || "")}</span>` : "") +
     ((s.tokens_in || s.tokens_out) ? `<span title="Tokens used in this conversation (in · out)">${fmtTokens((s.tokens_in || 0) + (s.tokens_out || 0))} tokens</span>` : "") +
     (s.cost ? `<span title="Total spent in this conversation">$${(+s.cost).toFixed(4)}</span>` : (s.tokens_in ? `<span>$0</span>` : "")) +
+    `<button class="btn ghost icon" data-top="export" title="Download this conversation as Markdown" aria-label="Download conversation">⤓</button>` +
+    `<button class="btn ghost icon" data-top="close" title="Close this view (keeps the conversation in the list)" aria-label="Close view">✕</button>` +
     `<button class="btn ghost icon" data-top="delete" title="Delete conversation" aria-label="Delete conversation">🗑</button>`;
 }
 $("topTools").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-top]"); if (!b) return;
+  const s = S.session;
   if (b.dataset.top === "review") openReview();
+  if (b.dataset.top === "export") location.href = `/api/sessions/${s.id}/export`;
+  if (b.dataset.top === "close") closeView();
   if (b.dataset.top === "delete") {
-    const s = S.session;
     if (!confirm(s.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
-    await api(`/api/sessions/${s.id}`, { method: "DELETE" });
-    S.current = null; S.session = null; $("title").textContent = "Promptaro"; renderTop(); closeReview(); welcome(); loadSessions();
+    try { await deleteSession(s.id); } catch (err) { toast(err.message); }
   }
 });
 function updateComposer() { $("stopBtn").classList.toggle("hidden", !(S.session?.kind === "agent" && S.running)); }
@@ -383,7 +408,7 @@ async function send() {
 $("stopBtn").onclick = () => S.current && api(`/api/sessions/${S.current}/stop`, { method: "POST" });
 $("modelPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { model: $("modelPick").value } });
 $("preferPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { prefer: $("preferPick").value } });
-$("newChat").onclick = () => { S.current = null; S.session = null; $("title").textContent = "New chat"; inputHint(); renderSide(); renderTop(); closeReview(); welcome(); input.focus(); $("side").classList.remove("open"); };
+$("newChat").onclick = () => { closeView(); $("title").textContent = "New chat"; input.focus(); $("side").classList.remove("open"); };
 
 /* ---------------- live events ---------------- */
 let streamKey = "";
@@ -464,14 +489,17 @@ $("manualRun").onclick = async () => {
 };
 $("manualCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") $("manualRun").click(); });
 
-/* ---------------- new agent ---------------- */
-async function openAgentDialog() {
-  $("agentErr").textContent = ""; $("agentModel").value = $("modelPick").value;
+/* ---------------- new agent / project chat ---------------- */
+async function fillProjects(input, box) {
   try {
     const ps = await api("/api/projects");
-    $("recentProjects").innerHTML = ps.map((p) => `<button type="button" data-proj="${esc(p)}" title="${esc(p)}">${esc(p.split("/").pop())}</button>`).join("");
-    if (!$("projPath").value && ps[0]) $("projPath").value = ps[0];
+    box.innerHTML = ps.map((p) => `<button type="button" data-proj="${esc(p)}" title="${esc(p)}">${esc(p.split(/[\\/]/).filter(Boolean).pop() || p)}</button>`).join("");
+    if (!input.value && ps[0]) input.value = ps[0];
   } catch {}
+}
+async function openAgentDialog() {
+  $("agentErr").textContent = ""; $("agentModel").value = $("modelPick").value;
+  await fillProjects($("projPath"), $("recentProjects"));
   $("agentDlg").showModal(); $("taskText").focus();
 }
 $("newAgent").onclick = () => { openAgentDialog(); $("side").classList.remove("open"); };
@@ -499,6 +527,31 @@ $("agentForm").addEventListener("submit", async (e) => {
   } finally { $("agentStart").disabled = false; }
 });
 
+/* ---------------- project chat ---------------- */
+async function openProjChat() {
+  $("projChatErr").textContent = "";
+  await fillProjects($("chatProjPath"), $("chatRecentProjects"));
+  $("projChatDlg").showModal(); $("chatProjPath").focus();
+}
+$("newProjChat").onclick = () => { openProjChat(); $("side").classList.remove("open"); };
+$("chatRecentProjects").addEventListener("click", (e) => { const b = e.target.closest("[data-proj]"); if (b) $("chatProjPath").value = b.dataset.proj; });
+$("projChatCancel").onclick = () => $("projChatDlg").close();
+$("pickChatFolder").onclick = async () => {
+  try { const r = await api("/api/pick-folder", { method: "POST" }); if (r.path) $("chatProjPath").value = r.path; }
+  catch { $("chatProjPath").focus(); toast("Type or paste the folder path"); }
+};
+$("projChatForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const p = $("chatProjPath").value.trim();
+  if (!p) { $("projChatErr").textContent = "Choose a project folder."; return; }
+  try {
+    const s = await api("/api/sessions", { method: "POST", body: { project: p } });
+    $("projChatDlg").close(); $("chatProjPath").value = "";
+    await loadSessions(); await openSession(s.id);
+    toast("Ask anything — the model reads this project to answer, and can't change it.", 5000);
+  } catch (err) { $("projChatErr").textContent = err.message; }
+});
+
 /* ---------------- connections ---------------- */
 async function openConnections() {
   const s = await api("/connect/status");
@@ -521,6 +574,17 @@ async function openConnections() {
   rows.push(planRow(subs.codex || {}, "ChatGPT subscription (Codex CLI)", "Codex CLI", "codex login", "https://developers.openai.com/codex/cli"));
   try { rows.push(freeRows(await api("/api/free"))); } catch {}
   rows.push(`<div class="conn-row"><span class="dot ${s.ollama.length ? "on" : ""}"></span><span class="grow"><strong>Ollama (local models)</strong><br><span class="sub">${s.ollama.length ? esc(s.ollama.join(", ")) : "Start Ollama and it's picked up automatically"}</span></span></div>`);
+  const eps = s.endpoints || [];
+  rows.push(`<div class="free-head"><h3>Custom endpoints</h3><span class="fine">Any OpenAI-compatible API — Ollama, LM Studio, vLLM, or a company proxy. Local servers need no key.</span></div>`);
+  rows.push(eps.map((e) => `<div class="conn-row"><span class="dot on"></span><span class="grow"><strong>${esc(e.label)}</strong> ${e.private ? '<span class="badge private" title="Treated as private: code may use it">Private — safe for code</span>' : '<span class="badge trains" title="Treated like an outside service: chats only">Outside service</span>'}<br><span class="sub">${esc(e.base_url)} · ${esc((e.models || []).join(", "))}${e.has_key ? " · key saved" : ""}</span></span><button class="btn" data-rmep="${esc(e.id)}">Remove</button></div>`).join(""));
+  rows.push(`<div class="ep-form">
+    <input id="epLabel" placeholder="Name — e.g. My Ollama" autocomplete="off">
+    <input id="epBase" placeholder="Base URL — http://localhost:11434/v1" autocomplete="off" spellcheck="false">
+    <input id="epModels" placeholder="Models (comma-separated, blank = auto-detect)" autocomplete="off" spellcheck="false">
+    <input id="epKey" type="password" autocomplete="off" placeholder="API key (only if the endpoint needs one)">
+    <label class="fine"><input type="checkbox" id="epPrivate"> Private — a local or company endpoint that can't train on prompts, so code may use it</label>
+    <button class="btn primary" id="epAdd">Add endpoint</button>
+  </div>`);
   const fm = (s.settings || {}).free_models || "chat";
   const q = s.free_quota;
   const quota = !q ? "" : q.available ? `<br><span class="sub quota">Free requests left today: <b>${q.remaining ?? "checking…"}</b>${q.limit ? ` of ${q.limit}` : ""}</span>`
@@ -583,6 +647,27 @@ $("openConnections").onclick = () => { connMsg(); openConnections(); };
 $("connClose").onclick = async () => { $("connDlg").close(); await loadModels(); if (!S.current) welcome(); };
 $("connBody").addEventListener("click", async (e) => {
   if (e.target.dataset.recheck) { e.target.textContent = "Checking…"; await api("/api/subscriptions?refresh=1"); await loadModels(); return openConnections(); }
+  if (e.target.id === "epAdd") {
+    const body = { label: $("epLabel").value.trim(), base_url: $("epBase").value.trim(),
+                   models: $("epModels").value.trim(), key: $("epKey").value.trim() || null,
+                   private: $("epPrivate").checked };
+    e.target.disabled = true; connMsg();
+    try {
+      const r = await api("/connect/endpoints", { method: "POST", body });
+      connMsg("ok", `${r.endpoint.label} added — ${r.models} model(s) ready.`);
+      await loadModels(); await openConnections();
+      connMsg("ok", `${r.endpoint.label} added — ${r.models} model(s) ready.`);
+    } catch (err) { connMsg("bad", err.message); }
+    finally { e.target.disabled = false; }
+    return;
+  }
+  const rmep = e.target.dataset.rmep;
+  if (rmep) {
+    try { await api(`/connect/endpoints/${rmep}`, { method: "DELETE" }); connMsg("ok", "Endpoint removed."); }
+    catch (err) { connMsg("bad", err.message); }
+    await loadModels(); openConnections();
+    return;
+  }
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on) {
     const inp = $("connBody").querySelector(`[data-key="${on}"]`); const k = inp.value.trim(); inp.value = "";

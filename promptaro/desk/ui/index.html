@@ -18,6 +18,7 @@
     <div class="side-actions">
       <button class="btn primary" id="newAgent" title="Give an agent a task in one of your projects">New agent task</button>
       <button class="btn" id="newChat">New chat</button>
+      <button class="btn ghost" id="newProjChat" title="A chat bound to a folder — the model reads your code to answer">New project chat</button>
     </div>
     <nav class="lists">
       <div class="group" id="agentsGroup"><h3>Agents</h3><ul id="agentList"></ul></div>
@@ -108,6 +109,25 @@
       <button type="submit" class="btn primary" id="agentStart">Start agent</button>
     </div>
     <p class="fine">The agent works on a separate copy of your project (a git worktree on its own branch). Nothing touches your files until you merge.</p>
+  </form>
+</dialog>
+
+<!-- New project chat -->
+<dialog id="projChatDlg">
+  <form method="dialog" class="dlg" id="projChatForm" novalidate>
+    <h2>New project chat</h2>
+    <p class="fine">A chat bound to a folder: the model reads your code to answer your questions, and it can never change or run anything.</p>
+    <label>Project folder</label>
+    <div class="row">
+      <input id="chatProjPath" placeholder="/Users/you/code/my-repo" autocomplete="off">
+      <button type="button" class="btn" id="pickChatFolder">Choose…</button>
+    </div>
+    <div class="recent" id="chatRecentProjects"></div>
+    <p class="form-error" id="projChatErr"></p>
+    <div class="row end">
+      <button type="button" class="btn" id="projChatCancel">Cancel</button>
+      <button type="submit" class="btn primary">Start chat</button>
+    </div>
   </form>
 </dialog>
 

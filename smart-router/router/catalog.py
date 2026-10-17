@@ -223,6 +223,60 @@ def set_settings(**kw) -> dict:
     return d
 
 
+# ------------------------------------------------- custom OpenAI-compatible endpoints
+def custom_endpoints() -> list[dict]:
+    """User-added endpoints (Ollama, LM Studio, vLLM, a company proxy) from settings.json."""
+    return [dict(e) for e in get_settings().get("custom_endpoints") or []]
+
+
+def save_endpoint(ep: dict) -> list[dict]:
+    eps = [e for e in custom_endpoints() if e.get("id") != ep["id"]]
+    eps.append(ep)
+    return set_settings(custom_endpoints=eps).get("custom_endpoints") or []
+
+
+def drop_endpoint(eid: str) -> list[dict]:
+    eps = [e for e in custom_endpoints() if e.get("id") != eid]
+    return set_settings(custom_endpoints=eps).get("custom_endpoints") or []
+
+
+def discover_endpoint_models(base_url: str, key_env: str = "", client: httpx.Client | None = None) -> list[str]:
+    """GET {base}/models — validates an OpenAI-compatible endpoint and lists what it serves."""
+    headers = {}
+    if key_env:
+        key = secrets.get(key_env)
+        if key:
+            headers["authorization"] = f"Bearer {key}"
+    c = client or httpx.Client(timeout=15)
+    r = c.get(f"{base_url.rstrip('/')}/models", headers=headers)
+    r.raise_for_status()
+    d = r.json()
+    rows = d.get("data", d.get("models", [])) if isinstance(d, dict) else d
+    return [m.get("id") or m.get("name") for m in rows if isinstance(m, dict) and (m.get("id") or m.get("name"))]
+
+
+def note_endpoint_models(eid: str, ids: list[str]) -> None:
+    _write_cache(f"custom_{eid}.json", ids)
+
+
+def custom_specs() -> list[dict]:
+    """Model entries for every saved endpoint. 'Private' ones (local or company) may see code."""
+    specs = []
+    for ep in custom_endpoints():
+        ids = _read_cache(f"custom_{ep['id']}.json", 10 ** 9) or ep.get("models") or []
+        tier = int(ep.get("tier", 2)) if int(ep.get("tier", 2)) in (1, 2, 3) else 2
+        for m in ids[:8]:
+            specs.append({
+                "id": f"{ep['id']}/{m}", "name": f"{m} ({ep['label']})",
+                "provider": "openai_compatible", "model": m,
+                "api_key_env": ep.get("key_env", ""), "base_url": ep["base_url"],
+                "via": ep["label"], "free": True, "trains": bool(ep.get("trains", True)),
+                "vendor": "custom", "tier": tier, "context_window": int(ep.get("context", 32000)),
+                "capabilities": ["json"], "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": 1500,
+                "prior": {k: v - 0.08 for k, v in TIER_PRIOR[tier].items()}})
+    return specs
+
+
 def _is_free(m: dict) -> bool:
     p = m.get("pricing") or {}
     try:
@@ -315,7 +369,7 @@ def build_specs(cfg: dict, client: httpx.Client | None = None, cached_only: bool
     network — used at startup so the app can open immediately, with the real
     refresh happening in the background afterwards."""
     if not cfg.get("enabled", True):
-        return []
+        return custom_specs()            # user-added endpoints aren't part of the OpenRouter catalog
     local = []
     if cfg.get("ollama", "auto") == "auto":
         for name in ollama_models()[:3]:
@@ -391,7 +445,7 @@ def build_specs(cfg: dict, client: httpx.Client | None = None, cached_only: bool
                 # Free endpoints are slower and rate-limited; start them a little below paid small models.
                 "prior": {k: v - 0.06 for k, v in TIER_PRIOR[1].items()},
             })
-    return specs + free_provider_specs() + local
+    return specs + free_provider_specs() + custom_specs() + local
 
 
 # ------------------------------------------------------------ free quota

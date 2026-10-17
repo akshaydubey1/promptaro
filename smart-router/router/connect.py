@@ -76,6 +76,9 @@ async def status(request: Request):
                            for fp in FREE_PROVIDERS.values()],
         "free_usage": quota.LEDGER.snapshot(list(r.registry.usable())),
         "ollama": await asyncio.to_thread(catalog.ollama_models),
+        "endpoints": [{"id": e["id"], "label": e["label"], "base_url": e["base_url"],
+                       "models": e.get("models", []), "has_key": bool(e.get("key_env")),
+                       "private": not e.get("trains", True)} for e in catalog.custom_endpoints()],
         "settings": catalog.get_settings(),
         "models": [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""),
                     "free": bool(m.extra.get("free")),
@@ -156,6 +159,62 @@ async def refresh(request: Request):
                 pass
     await asyncio.to_thread(_router(request).reload)
     return {"ok": True}
+
+
+class EndpointBody(BaseModel):
+    label: str = Field(..., min_length=1, max_length=60)
+    base_url: str = Field(..., min_length=8, max_length=300)
+    models: str = ""                    # comma-separated ids; blank = ask the endpoint for its list
+    key: str | None = None              # optional API key, kept in the keychain like every other key
+    private: bool = False               # local or company endpoint that can't train on prompts
+    tier: int = Field(2, ge=1, le=3)
+
+
+@api.post("/connect/endpoints")
+async def add_endpoint(body: EndpointBody, request: Request):
+    """Add any OpenAI-compatible endpoint — Ollama, LM Studio, vLLM or a company proxy."""
+    base = body.base_url.strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        raise HTTPException(400, "The address must start with http:// or https:// (usually it ends in /v1).")
+    eid = "ep-" + pysecrets.token_hex(4)
+    key_env = ""
+    if (body.key or "").strip():
+        key_env = f"CUSTOM_{eid.replace('-', '_').upper()}_KEY"
+        secrets.set(key_env, clean_key(body.key))
+    typed = [m.strip() for m in body.models.split(",") if m.strip()]
+    found: list[str] = []
+    try:
+        found = await asyncio.to_thread(catalog.discover_endpoint_models, base, key_env)
+    except Exception as e:
+        if not typed:                                        # nothing to fall back on: the endpoint must answer
+            if key_env:
+                secrets.delete(key_env)
+            raise HTTPException(400, f"Couldn't reach {base}/models: {_provider_reason(e)}")
+    models = (typed or found)[:8]
+    if not models:
+        if key_env:
+            secrets.delete(key_env)
+        raise HTTPException(400, "No models listed — type at least one model id.")
+    ep = {"id": eid, "label": body.label.strip(), "base_url": base, "models": models,
+          "key_env": key_env, "trains": not body.private, "tier": body.tier}
+    catalog.note_endpoint_models(eid, found or models)
+    catalog.save_endpoint(ep)
+    await asyncio.to_thread(_router(request).reload)
+    out = {k: v for k, v in ep.items() if k != "key_env"} | {"has_key": bool(key_env)}
+    return {"connected": True, "endpoint": out, "models": len(models)}
+
+
+@api.delete("/connect/endpoints/{eid}")
+async def remove_endpoint(eid: str, request: Request):
+    for ep in catalog.custom_endpoints():
+        if ep.get("id") == eid:
+            if ep.get("key_env"):
+                secrets.delete(ep["key_env"])
+            catalog.drop_endpoint(eid)
+            (catalog.HOME / f"custom_{eid}.json").unlink(missing_ok=True)
+            await asyncio.to_thread(_router(request).reload)
+            return {"connected": False}
+    raise HTTPException(404, "unknown endpoint")
 
 
 class KeyBody(BaseModel):

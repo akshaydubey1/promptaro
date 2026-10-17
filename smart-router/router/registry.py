@@ -79,9 +79,13 @@ class Registry:
         self.catalog_cfg: dict = raw.get("catalog", {"enabled": False})
         self.models: dict[str, ModelSpec] = {}
         entries = list(raw.get("models", []))
-        if use_catalog and self.catalog_cfg.get("enabled", False):
-            from .catalog import build_specs
-            entries = build_specs(self.catalog_cfg, cached_only=not refresh_catalog) + entries
+        if use_catalog:
+            if self.catalog_cfg.get("enabled", False):
+                from .catalog import build_specs
+                entries = build_specs(self.catalog_cfg, cached_only=not refresh_catalog) + entries
+            else:
+                from .catalog import custom_specs        # user endpoints aren't part of the catalog toggle
+                entries = custom_specs() + entries
         for m in entries:
             self._add(m)
         self.breaker = CircuitBreaker()

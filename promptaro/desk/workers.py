@@ -35,8 +35,17 @@ HARD_TASK = 0.45          # complexity at or above this goes to a subscription
 REST_S = 3600             # how long a plan rests after hitting its usage limit
 ENGINES = ("claude_code", "codex")
 MODEL_IDS = {"claude-code": "claude_code", "codex": "codex"}      # Model menu id -> engine
+# Extra picks under each plan, e.g. "claude-code:opus" -> claude -p --model opus.
+MODEL_CHOICES = {"claude_code": {"sonnet": "Claude Sonnet", "opus": "Claude Opus", "haiku": "Claude Haiku"},
+                 "codex": {"gpt-5-codex": "GPT-5 Codex", "gpt-5": "GPT-5", "codex-mini-latest": "Codex mini"}}
 LABEL = {"claude_code": "Claude Code", "codex": "Codex"}
 PLAN = {"claude_code": "your Claude subscription", "codex": "your ChatGPT subscription"}
+
+
+def engine_of(model_id: str) -> tuple[str, str]:
+    """A model-menu id -> (engine, model variant): "claude-code:opus" -> ("claude_code", "opus")."""
+    base, _, variant = (model_id or "").partition(":")
+    return MODEL_IDS.get(base, ""), variant
 _LIMIT_RE = re.compile(r"usage limit|rate.?limit|limit reached|quota|too many requests|\b429\b|out of credits", re.I)
 
 _status_cache: dict[str, tuple[float, dict]] = {}
@@ -216,6 +225,7 @@ class _CliRun:
         self.desk, self.sid = desk, sid
         self.store = desk.store
         self.limited = False            # True when the plan's usage limit stopped the run
+        self.variant = ""               # per-model pick under the plan ("claude-code:opus" -> "opus")
 
     def args(self, exe: str, text: str, s: dict, st: dict) -> list[str]:
         raise NotImplementedError
@@ -238,8 +248,11 @@ class _CliRun:
         exe = self.exe()
         if not exe:
             return False
+        eng, var = engine_of(s.get("model"))
+        self.variant = var if eng == self.engine else ""    # a fallback engine ignores another plan's pick
+        name = LABEL[self.engine] if not self.variant else MODEL_CHOICES[self.engine].get(self.variant, self.variant)
         store.update(sid, status="running")
-        store.emit(sid, "model", {"model": self.engine.replace("_", "-"), "name": LABEL[self.engine],
+        store.emit(sid, "model", {"model": s.get("model") or self.engine.replace("_", "-"), "name": name,
                                   "via": PLAN[self.engine], "subscription": True,
                                   "why": f"hard task, so it runs on {PLAN[self.engine]} instead of per-use billing",
                                   "explain": {"level": "hard", "because": "hard agent work runs on a plan you "
@@ -315,6 +328,8 @@ class ClaudeCodeRun(_CliRun):
 
     def args(self, exe, text, s, st):
         a = [exe, "-p", text, "--output-format", "stream-json", "--verbose", "--append-system-prompt", WORKER_NOTE]
+        if self.variant:
+            a += ["--model", self.variant]
         if (s.get("approval") or "ask_risky") == "never_ask":
             a += ["--permission-mode", "bypassPermissions", "--disallowedTools", *NEVER_TOOLS]
         else:
@@ -376,6 +391,8 @@ class CodexRun(_CliRun):
     def args(self, exe, text, s, st):
         # workspace-write: may edit files inside the task's copy only; no network. `exec` never stops to ask.
         common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"']
+        if self.variant:
+            common += ["-m", self.variant]
         prompt = f"{WORKER_NOTE}\n\n{text}"
         if st.get("codex_session"):
             return [exe, "exec", "resume", *common, st["codex_session"], prompt]
