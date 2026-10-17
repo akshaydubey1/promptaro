@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import Scripted, act, wait_task
+from conftest import Scripted, act, drain_catalog_refresh, wait_task
 from desk import workers
 from router import catalog
 
@@ -24,6 +24,7 @@ HARD = ("Architect and implement a production-grade, thread-safe retry layer wit
 def client(router_root):
     from desk import server
     with TestClient(server.app) as c:
+        drain_catalog_refresh(c)
         fake = Scripted()
         server.desk.router.providers = {k: fake for k in ("anthropic", "openai", "openai_compatible", "offline")}
         c.fake, c.desk = fake, server.desk
