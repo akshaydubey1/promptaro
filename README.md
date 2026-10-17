@@ -9,11 +9,21 @@ Every AI model, the right one for each task. This repository holds two parts tha
 | [`promptaro/`](promptaro/README.md) | The desktop app: chat with any model, run coding agents on your repos, use free models from Claude Code, Aider and other coding tools, and see what smart routing saved. (Previously released as Tillwright — existing installs migrate automatically.) |
 | [`smart-router/`](smart-router/README.md) | The engine: picks the cheapest model expected to do each request well (in under a millisecond, no model call), tracks free-tier limits, escalates on failure, learns from results, and serves the local gateway for coding tools. |
 
-## Run it
+## Run it — easiest path
 
-- **Mac:** double-click `promptaro/Install Promptaro.command` once (adds the app to Applications), or `promptaro/Start Promptaro.command`.
-- **Windows:** `promptaro/Install Promptaro.bat` or `promptaro/Start Promptaro.bat`.
-- **Linux:** `promptaro/packaging/install-linux.sh` or `promptaro/launch.sh`.
+Download or clone this folder, then **double-click one file. Promptaro installs itself and opens in your browser.**
+
+| | Double-click this | What happens |
+|---|---|---|
+| **Mac** | `promptaro/Install Promptaro.command` | Installs **Promptaro.app** into Applications *and opens it*. From then on it's a normal app: Spotlight, Launchpad, Dock. (Not Apple-signed — if macOS refuses, right-click the file → **Open**.) |
+| **Windows** | `promptaro/Install Promptaro.bat` | Adds **Promptaro** to the Start menu and desktop *and starts it*. From then on, click the shortcut. |
+| **Linux** | `promptaro/packaging/install-linux.sh` | Adds **Promptaro** to your app menu *and starts it*. |
+
+First start takes about a minute (it sets up its Python tools). Afterwards it opens instantly and keeps
+running in the background; **Connections → Quit Promptaro** stops it. No code needed anywhere — no
+terminal commands, no build steps.
+
+Want it without installing? `promptaro/Start Promptaro.command` / `.bat` (or `promptaro/launch.sh`) runs it in place.
 
 The two folders must stay side by side.
 

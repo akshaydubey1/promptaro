@@ -2,7 +2,7 @@
 
 Author: Akshay Dubey
 
-*Promptaro was previously called Promptaro. Existing installs keep working: settings, keys,
+*Promptaro was previously called Tillwright. Existing installs keep working: settings, keys,
 sessions and `tw-*` launchers are read and migrated automatically.*
 
 Chat with any AI model, and hand coding tasks to agents that work on your repos
@@ -13,11 +13,13 @@ one when a step fails.
 
 ## Install and start
 
+**Double-click one file. Promptaro installs itself and opens in your browser.**
+
 | | |
 |---|---|
-| **Mac** | Double-click **Install Promptaro.command** once. Promptaro.app appears in Applications (and Launchpad and Spotlight); drag it to the Dock. Or double-click **Start Promptaro.command** to run it in a Terminal window. The app isn't Apple-signed: if macOS blocks it, right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/Promptaro.app`. |
-| **Windows** | Double-click **Install Promptaro.bat** once for a Start-menu and desktop shortcut, or **Start Promptaro.bat** to run it. |
-| **Linux** | Run `packaging/install-linux.sh` once for an app-menu entry, or `./launch.sh`. |
+| **Mac** | Double-click **Install Promptaro.command** once — Promptaro.app lands in Applications (Launchpad, Spotlight, Dock) *and opens*. Next time, just open the app like any other. The app isn't Apple-signed: if macOS blocks it, right-click → **Open**. To run without installing, double-click **Start Promptaro.command**. |
+| **Windows** | Double-click **Install Promptaro.bat** once — a Start-menu and desktop shortcut appear *and the app starts*. Next time, click the shortcut. To run without installing, use **Start Promptaro.bat**. |
+| **Linux** | Run `packaging/install-linux.sh` once — an app-menu entry appears *and the app starts*. To run without installing, `./launch.sh`. |
 
 The first start installs what it needs (about a minute). It opens in its own window if Chrome, Edge or Brave is
 installed, otherwise in your browser. It keeps running in the background after the window closes, so it opens

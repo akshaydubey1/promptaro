@@ -9,6 +9,6 @@ foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetF
   $lnk.IconLocation = "$Here\packaging\icon.ico"
   $lnk.WorkingDirectory = $Here
   $lnk.Save()
+  Remove-Item (Join-Path $dir "Tillwright.lnk") -ErrorAction SilentlyContinue   # old shortcut, if present
 }
-Remove-Item (Join-Path $dir "Tillwright.lnk") -ErrorAction SilentlyContinue   # old shortcut, if present
 Write-Host "Promptaro is in your Start menu and on your desktop."

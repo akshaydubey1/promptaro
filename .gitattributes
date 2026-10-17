@@ -1,0 +1,8 @@
+# Windows-native files: stored LF in the repo, checked out CRLF so
+# cmd.exe / PowerShell read them correctly on Windows.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# POSIX entry points must stay LF even when checked out on Windows.
+*.sh text eol=lf
+*.command text eol=lf
