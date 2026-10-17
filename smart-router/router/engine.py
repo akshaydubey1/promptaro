@@ -103,10 +103,11 @@ class RunResult:
 
 class Router:
     def __init__(self, root: str | Path = ".", db_path: str | Path | None = None,
-                 providers: dict[str, Provider] | None = None, use_catalog: bool = True):
+                 providers: dict[str, Provider] | None = None, use_catalog: bool = True,
+                 refresh_catalog: bool = True):
         root = Path(root)
         self._cfg_path, self._use_catalog = root / "config" / "models.yaml", use_catalog
-        self.registry = Registry(self._cfg_path, use_catalog)
+        self.registry = Registry(self._cfg_path, use_catalog, refresh_catalog)
         self.skills = SkillLibrary.load(root / "skills")
         self.store = Store(db_path or root / "data" / "router.db")
         self._client = httpx.AsyncClient(timeout=self.registry.defaults.get("request_timeout_s", 120))
@@ -153,6 +154,16 @@ class Router:
     def reload(self) -> None:
         """Rebuild the model list, e.g. after a new connection is added."""
         self.registry = Registry(self._cfg_path, self._use_catalog)
+
+    async def refresh_catalog(self) -> None:
+        """Fetch fresh model lists off the critical path, then swap in the new registry.
+
+        Startup builds the registry cache-only (refresh_catalog=False) so the app
+        opens instantly; this finishes the real refresh in a worker thread."""
+        try:
+            await asyncio.to_thread(self.reload)
+        except Exception:
+            pass
 
     async def aclose(self) -> None:
         await self._client.aclose()
