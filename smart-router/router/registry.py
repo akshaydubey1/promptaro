@@ -101,7 +101,7 @@ class Registry:
             fallback_only=bool(m.get("fallback_only", False)),
             extra={"via": m.get("via", "config"), "name": m.get("name", m["id"]), "free": bool(m.get("free", False)),
                    "vendor": m.get("vendor") or m["id"].split("/", 1)[0], "trains": bool(m.get("trains", False)),
-                   "quota": m.get("quota"), "limits": m.get("limits")},
+                   "quota": m.get("quota"), "limits": m.get("limits"), "plan": bool(m.get("plan", False))},
         )
         self.models.setdefault(spec.id, spec)
 

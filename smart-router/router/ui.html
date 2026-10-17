@@ -139,6 +139,12 @@ async function load(){
              <button data-on="${v}">Connect</button>`}</div>`);
     }
   }
+  for (const p of (s.free_providers || []).filter(p => p.plan)){
+    rows.push(`<div class="conn"><span class="dot ${p.connected?'on':''}"></span><span class="grow"><strong>${esc(p.label)}</strong>
+      <span class="sub"> · ${esc(p.note)}</span></span>
+      ${p.connected ? `<span class="chip">Connected</span><button data-off="${p.id}">Disconnect</button>`
+                    : `<button class="btn primary" data-copilot="1">Sign in with GitHub</button>`}</div>`);
+  }
   rows.push(`<div class="conn"><span class="dot ${s.ollama.length?'on':''}"></span><span class="grow"><strong>Ollama (local models)</strong>
      <span class="sub"> · ${s.ollama.length ? esc(s.ollama.join(', ')) : 'not running — detected automatically when it is'}</span></span></div>`);
   $('connlist').innerHTML = rows.join('');
@@ -153,7 +159,29 @@ async function connectVendor(v, key, workspace_id){
     body: JSON.stringify(workspace_id ? {key, workspace_id} : {key})});
 }
 
+async function copilotSignIn(btn){
+  btn.disabled = true; btn.textContent = 'Waiting for GitHub…';
+  try{
+    const d = await (await fetch('/connect/copilot/device', {method:'POST', headers:{'x-promptaro':'1'}})).json();
+    if (d.detail) throw new Error(d.detail);
+    banner('good', `Sign in to GitHub: open <b>${esc(d.verification_uri)}</b> and enter code <b style="font-size:1.3em">${esc(d.user_code)}</b>. Waiting for approval…`);
+    window.open(d.verification_uri, '_blank', 'noopener');
+    const deadline = Date.now() + (d.expires_in || 900) * 1000;
+    let wait = Math.max(2, d.interval || 5) * 1000;
+    while (Date.now() < deadline){
+      await new Promise(r => setTimeout(r, wait));
+      const s = await (await fetch('/connect/copilot/device/status')).json();
+      if (s.status === 'pending'){ wait = Math.max(2, s.interval || 5) * 1000; continue; }
+      if (s.status === 'connected'){ banner('good', `GitHub Copilot connected — ${s.models || 0} models from your plan are ready.`); load(); return; }
+      banner('err', s.detail || 'GitHub sign-in did not complete.'); return;
+    }
+    banner('err', 'GitHub sign-in expired — try again.');
+  } catch (err){ banner('err', err.message); }
+  finally { btn.disabled = false; btn.textContent = 'Sign in with GitHub'; }
+}
+
 document.addEventListener('click', async e => {
+  if (e.target.dataset.copilot) return copilotSignIn(e.target);
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on){
     const inp = document.querySelector(`input[data-key="${on}"]`);

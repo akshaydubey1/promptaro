@@ -494,7 +494,7 @@ async def free_status():
     from router import quota, secrets
     from router.free_providers import FREE_PROVIDERS
     reg = desk.router.registry
-    return {"providers": [{"id": p.id, "label": p.label, "connected": secrets.has(p.key_env),
+    return {"providers": [{"id": p.id, "label": p.label, "connected": secrets.has(p.key_env), "plan": p.plan,
                            "get_key_url": p.get_key_url, "trains": p.trains, "limits": p.limits, "note": p.note,
                            "checked": p.checked, "source": p.source} for p in FREE_PROVIDERS.values()],
             "usage": quota.LEDGER.snapshot(list(reg.usable()))}

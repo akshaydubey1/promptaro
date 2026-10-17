@@ -33,7 +33,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import catalog, quota, secrets
+from . import catalog, copilot, quota, secrets
 from .classifier import classify
 from .providers import ProviderError, rate_headers
 from .selector import route
@@ -387,7 +387,7 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
             return False                                        # fail closed: never silently spend
         if not is_free and m.cost(est_in, est_out) > daily_left:
             return False                                        # daily budget reached
-        if m.extra.get("free") and (
+        if m.extra.get("free") and not m.extra.get("plan") and (
                 mode == "off"                                    # free models disabled entirely
                 or (mode != "all" and m.extra.get("trains"))     # private work: no trainers
                 or (not m.extra.get("quota") and not free_ok)):  # shared :free pool exhausted
@@ -450,7 +450,7 @@ async def plan_or_wait(router, **kw) -> list:
     waits = []
     for m in router.registry.usable():
         if not m.extra.get("quota") or (need - m.capabilities) or (mode != "all" and m.extra.get("trains")) \
-                or mode == "off" or kw["est_in"] > m.context_window * 0.9:
+                or (mode == "off" and not m.extra.get("plan")) or kw["est_in"] > m.context_window * 0.9:
             continue
         if free_only and not (m.extra.get("free") or (m.price_in == 0 and m.price_out == 0)):
             continue
@@ -467,7 +467,12 @@ async def plan_or_wait(router, **kw) -> list:
 
 
 # ================================================================ upstream
-def _openai_target(spec) -> tuple[str, dict]:
+async def _openai_target(spec) -> tuple[str, dict]:
+    if spec.provider == "github_copilot":
+        # The stored credential is a GitHub OAuth token; the API wants the short-lived
+        # service token it mints, plus the Copilot client headers.
+        token, api = await copilot.aservice_token(_http())
+        return f"{api}/chat/completions", copilot.chat_headers(token)
     base = (spec.base_url or "https://api.openai.com/v1").rstrip("/")
     headers = {"content-type": "application/json"}
     key = secrets.get(spec.api_key_env) if spec.api_key_env else ""
@@ -641,7 +646,7 @@ async def messages(request: Request):
                          rate_headers(resp), res, stick)
                 headers = _model_headers(spec)
                 return JSONResponse(d, headers=headers)
-            url, hdrs = _openai_target(spec)
+            url, hdrs = await _openai_target(spec)
             ob = anthropic_to_openai(body, short_ids=spec.extra.get("quota") in ("mistral", "codestral"))
             ob["model"] = spec.model
             room = max(256, spec.context_window - est_in - 256)
@@ -739,7 +744,7 @@ async def chat_completions(request: Request):
                  if isinstance(m.get("content"), list) for p in m["content"])
     cands = [c for c in await plan_or_wait(router, messages=msgs, est_in=est_in, est_out=min(want_out, 1024),
                                            tools=bool(body.get("tools")), images=images, requested=requested)
-             if c.provider in ("openai", "openai_compatible")]
+             if c.provider in ("openai", "openai_compatible", "github_copilot")]
     if not cands:
         return _openai_error(503, "no_model", "No connected model can take this request right now. Add a free "
                              "provider or a key in Promptaro → Connections.")
@@ -754,7 +759,7 @@ async def chat_completions(request: Request):
             if not ok:
                 skipped.append(f"{spec.extra.get('name', spec.id)}: {why}")
                 continue
-        url, hdrs = _openai_target(spec)
+        url, hdrs = await _openai_target(spec)
         ob = {k: v for k, v in body.items() if k not in ("max_tokens", "max_completion_tokens")}
         ob["model"] = spec.model
         room = max(256, spec.context_window - est_in - 256)

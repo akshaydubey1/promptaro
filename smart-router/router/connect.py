@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import catalog, quota, secrets
+from . import catalog, copilot, quota, secrets
 from .free_providers import FREE_PROVIDERS
 from .free_providers import detect as detect_free
 
@@ -71,6 +71,7 @@ async def status(request: Request):
         "connections": {v: {"label": d["label"], "connected": secrets.has(d["key"]), "get_key_url": d["get_key_url"]}
                         for v, d in VENDORS.items() if not d.get("free")},
         "free_providers": [{"id": fp.id, "label": fp.label, "connected": secrets.has(fp.key_env),
+                            "plan": fp.plan,
                             "get_key_url": fp.get_key_url, "trains": fp.trains, "limits": fp.limits,
                             "note": fp.note, "checked": fp.checked, "source": fp.source}
                            for fp in FREE_PROVIDERS.values()],
@@ -125,6 +126,35 @@ class SettingsBody(BaseModel):
     free_models: str | None = Field(None, pattern="^(off|chat|all)$")
     gateway_spend: str | None = Field(None, pattern="^(free|paid_ok)$")
     daily_budget_usd: float | None = Field(None, ge=0, le=10000)
+
+
+@api.post("/connect/copilot/device")
+async def copilot_device_start(request: Request):
+    """GitHub device flow: returns a code for the person to enter at github.com/login/device."""
+    try:
+        return await asyncio.to_thread(copilot.start_device)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't reach GitHub to start sign-in: {secrets.redact(str(e))[:200]}")
+
+
+@api.get("/connect/copilot/device/status")
+async def copilot_device_status(request: Request):
+    """Poll while the person approves in the browser; connects when GitHub says so."""
+    try:
+        d = await asyncio.to_thread(copilot.poll_device)
+    except Exception as e:
+        raise HTTPException(502, f"GitHub sign-in check failed: {secrets.redact(str(e))[:200]}")
+    if d["status"] == "connected":
+        try:
+            await asyncio.to_thread(catalog.discover_free, "github_copilot")
+        except Exception as e:
+            copilot.disconnect()
+            raise HTTPException(502, f"Signed in, but couldn't list Copilot models "
+                                     f"(is a Copilot plan active?): {secrets.redact(str(e))[:200]}")
+        await asyncio.to_thread(_router(request).reload)
+        d["models"] = sum(1 for m in _router(request).registry.usable()
+                          if m.extra.get("vendor") == "github_copilot")
+    return d
 
 
 @api.post("/connect/settings")
@@ -309,6 +339,10 @@ async def _connect(vendor: str, raw_key: str, request: Request, workspace_id: st
 
 @api.delete("/connect/{vendor}")
 async def disconnect(vendor: str, request: Request):
+    if vendor == "github_copilot":
+        copilot.disconnect()
+        await asyncio.to_thread(_router(request).reload)
+        return {"connected": False}
     if vendor not in VENDORS:
         raise HTTPException(404, "unknown provider")
     secrets.delete(VENDORS[vendor]["key"])
