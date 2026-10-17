@@ -70,7 +70,7 @@ class CircuitBreaker:
 
 
 class Registry:
-    def __init__(self, path: str | Path, use_catalog: bool = True):
+    def __init__(self, path: str | Path, use_catalog: bool = True, refresh_catalog: bool = True):
         raw = yaml.safe_load(Path(path).read_text())
         self.defaults = raw.get("defaults", {})
         self.quality_targets: dict[str, float] = raw.get("quality_targets", {})
@@ -81,7 +81,7 @@ class Registry:
         entries = list(raw.get("models", []))
         if use_catalog and self.catalog_cfg.get("enabled", False):
             from .catalog import build_specs
-            entries = build_specs(self.catalog_cfg) + entries
+            entries = build_specs(self.catalog_cfg, cached_only=not refresh_catalog) + entries
         for m in entries:
             self._add(m)
         self.breaker = CircuitBreaker()
