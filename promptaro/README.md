@@ -45,6 +45,7 @@ instantly next time; **Connections → Quit Promptaro** stops it.
 | **Works without AI** | Review, running commands in a task's copy, commit, merge, PR and discard are all plain code and work with nothing connected. |
 | **Project chat** | Bind a chat to a folder and the model reads your code (list/read/search only — it can never change or run anything) to ground its answers. |
 | **Your conversations** | Hover ✕ on any sidebar item to delete it; the header's ✕ just closes the view, and ⤓ downloads the whole conversation as Markdown (or `?format=json` for the raw events). |
+| **Studio** | Generate images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI and Cloudflare keys (optional), plus Pollinations which needs no key — tried best-first. Convert files locally: make or combine PDFs, and convert images, audio, video and documents between formats. Files never leave your Mac. |
 
 ## Free tokens for your coding tools
 

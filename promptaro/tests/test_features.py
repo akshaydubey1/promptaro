@@ -236,3 +236,140 @@ def test_rename_project(client, repo):
     assert client.get("/api/project-names").json() == {str(repo): "Calc"}
     client.post("/api/projects/rename", json={"path": str(repo), "name": ""}, headers=H)
     assert client.get("/api/project-names").json() == {}          # empty name restores the folder name
+
+
+# --------------------------------------------------------------- studio tools
+def test_tools_capabilities(client):
+    r = client.get("/api/tools/capabilities").json()
+    assert "convert" in r and "media" in r
+    kinds = {m["id"]: m["kinds"] for m in r["media"]}
+    assert kinds["pollinations"] == ["image"]                      # keyless fallback always listed
+    assert any("video" in k for k in kinds.values())
+
+
+def test_generate_saves_file_and_downloads(client, monkeypatch):
+    from router import media
+    monkeypatch.setattr(media, "generate", lambda kind, prompt, w, h: (b"\x89PNG" + b"0" * 200, "image/png", "test-provider"))
+    r = client.post("/api/tools/generate", headers=H, json={"kind": "image", "prompt": "a koi pond"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["provider"] == "test-provider" and d["bytes"] > 100
+    got = client.get(d["url"])
+    assert got.status_code == 200 and got.content[:4] == b"\x89PNG"
+
+
+def test_generate_reports_every_failure(client, monkeypatch):
+    from router import media
+    def boom(kind, prompt, w, h):
+        raise RuntimeError("all providers said no")
+    monkeypatch.setattr(media, "generate", boom)
+    r = client.post("/api/tools/generate", headers=H, json={"kind": "video", "prompt": "waves"})
+    assert r.status_code == 400 and "providers said no" in r.json()["detail"]
+
+
+def test_generate_needs_the_app_header(client):
+    assert client.post("/api/tools/generate", json={"kind": "image", "prompt": "x"}).status_code == 403
+
+
+def test_media_provider_order_and_fallback(monkeypatch):
+    """Best-first: a failing provider hands off to the next connected one."""
+    from router import media
+    calls = []
+    monkeypatch.setattr(media.secrets, "has", lambda k: k in ("GEMINI_API_KEY", "HF_TOKEN", "TOGETHER_API_KEY"))
+    monkeypatch.setitem(media._GENERATORS, ("gemini", "image"),
+                        lambda p, w, h: (_ for _ in ()).throw(RuntimeError("quota")))
+    monkeypatch.setitem(media._GENERATORS, ("huggingface", "image"), lambda p, w, h: (b"img" * 100, "image/png"))
+    data, mime, who = media.generate("image", "a lighthouse", 512, 512)
+    assert who == "huggingface" and mime == "image/png"
+    monkeypatch.setattr(media.secrets, "has", lambda k: False)
+    monkeypatch.setitem(media._GENERATORS, ("pollinations", "image"), lambda p, w, h: (b"p" * 200, "image/jpeg"))
+    assert media.generate("image", "x", 512, 512)[2] == "pollinations"
+
+
+def test_media_video_error_names_the_fix(monkeypatch):
+    from router import media
+    monkeypatch.setattr(media.secrets, "has", lambda k: False)
+    with pytest.raises(RuntimeError, match="Hugging Face token"):
+        media.generate("video", "ocean waves", 512, 512)
+
+
+def test_hf_key_autodetects():
+    from router.connect import detect_vendor
+    assert detect_vendor("hf_abcdefghijklmnopqrstuvwxyz1234") == "huggingface"
+    assert detect_vendor("sk-or-v1-abcdef") == "openrouter"
+
+
+# --------------------------------------------------------------- conversions
+def _png(path):
+    from PIL import Image
+    Image.new("RGB", (40, 30), (200, 30, 30)).save(path)
+    return path
+
+
+def test_make_and_merge_pdf(client, tmp_path):
+    pytest.importorskip("pypdf"); pytest.importorskip("PIL"); pytest.importorskip("reportlab")
+    img = _png(tmp_path / "pic.png")
+    txt = tmp_path / "notes.txt"; txt.write_text("first line\nsecond line\n" * 40)
+    r = client.post("/api/tools/convert", headers=H,
+                    json={"action": "make-pdf", "inputs": [str(img), str(txt)], "name": "bundle"})
+    assert r.status_code == 200, r.text
+    out = r.json()["outputs"][0]
+    data = client.get(out["url"]).content
+    assert data[:5] == b"%PDF-"
+    from pypdf import PdfReader
+    client.post("/api/tools/convert", headers=H, json={"action": "make-pdf", "inputs": [str(img)], "name": "a"})
+    client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [str(txt)], "format": "pdf"})
+    r = client.post("/api/tools/convert", headers=H,
+                    json={"action": "merge-pdf", "inputs": [_tools_path(client, "a.pdf"), _tools_path(client, "notes.pdf")],
+                          "name": "merged"})
+    assert r.status_code == 200, r.text
+    merged = client.get(r.json()["outputs"][0]["url"]).content
+    assert merged[:5] == b"%PDF-" and len(PdfReader(__import__("io").BytesIO(merged)).pages) >= 2
+
+
+def _tools_path(client, name):
+    s = client.get(f"/api/tools/output/{name}")
+    assert s.status_code == 200
+    import tempfile, pathlib
+    p = pathlib.Path(tempfile.mkdtemp()) / name
+    p.write_bytes(s.content)
+    return str(p)
+
+
+def test_convert_image_and_text(client, tmp_path):
+    pytest.importorskip("PIL")
+    img = _png(tmp_path / "pic.png")
+    r = client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [str(img)], "format": "webp"})
+    assert r.status_code == 200, r.text
+    assert client.get(r.json()["outputs"][0]["url"]).content[:4] == b"RIFF"
+    pytest.importorskip("reportlab")
+    txt = tmp_path / "doc.md"; txt.write_text("# Title\n\nSome text")
+    r = client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [str(txt)], "format": "pdf"})
+    assert r.status_code == 200 and client.get(r.json()["outputs"][0]["url"]).content[:5] == b"%PDF-"
+
+
+def test_convert_audio_via_ffmpeg(client, tmp_path):
+    from desk import convert
+    if not convert.ffmpeg():
+        pytest.skip("no ffmpeg on this machine")
+    wav = convert.make_silence_wav(tmp_path / "tone.wav")
+    r = client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [str(wav)], "format": "mp3"})
+    assert r.status_code == 200, r.text
+    assert r.json()["outputs"][0]["bytes"] > 100
+
+
+def test_convert_pdf_to_text(client, tmp_path):
+    pytest.importorskip("pypdf")
+    pytest.importorskip("reportlab")
+    txt = tmp_path / "words.txt"; txt.write_text("the quick brown fox")
+    client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [str(txt)], "format": "pdf"})
+    pdf_path = _tools_path(client, "words.pdf")
+    r = client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": [pdf_path], "format": "txt"})
+    assert r.status_code == 200 and "quick brown fox" in client.get(r.json()["outputs"][0]["url"]).text
+
+
+def test_convert_rejects_bad_input(client):
+    r = client.post("/api/tools/convert", headers=H, json={"action": "convert", "inputs": ["/nope/gone.pdf"], "format": "txt"})
+    assert r.status_code == 400 and "Not found" in r.json()["detail"]
+    assert client.get("/api/tools/output/..%2F..%2Fetc%2Fpasswd").status_code in (404, 422)
+    assert client.get("/api/tools/output/not-a-file.bin").status_code == 404

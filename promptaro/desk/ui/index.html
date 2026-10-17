@@ -21,6 +21,7 @@
       <button class="btn ghost" id="newProjChat" title="A chat bound to a folder — the model reads your code to answer">New project chat</button>
     </div>
     <nav class="lists" id="lists"></nav>
+    <button class="btn ghost side-link" id="studioBtn" title="Generate images and video on free tiers; convert, make and combine files"><span class="glyph">✦</span>Studio</button>
     <button class="btn ghost side-link" id="toolsBtn" title="Use Claude Code, Aider, Cline and more on free models"><span class="glyph">›_</span>Coding tools</button>
     <button class="btn ghost savings-btn hidden" id="savingsBtn" title="What smart routing has saved you"><span>Saved</span><b id="savingsAmt">$0</b></button>
     <button class="btn ghost side-link" id="detailsBtn" title="Show or hide which model answered, tokens and cost under each answer"><span class="dot" id="detailsDot"></span>Model info</button>
@@ -150,6 +151,41 @@
       free model, real coding to the strongest free model that fits, and a model that hits its limit is swapped out at once.</p>
     <div id="toolsBody"></div>
     <div class="row end"><button class="btn" id="toolsClose">Done</button></div>
+  </div>
+</dialog>
+
+<!-- Studio: generate + file tools -->
+<dialog id="studioDlg">
+  <div class="dlg wide">
+    <h2>Studio</h2>
+    <p class="fine" id="studioCaps"></p>
+    <h3>Generate</h3>
+    <div class="row">
+      <select id="genKind"><option value="image">Image</option><option value="video">Video</option></select>
+      <select id="genSize"><option value="square">Square</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option><option value="hd">HD (16:9)</option></select>
+    </div>
+    <textarea id="genPrompt" rows="3" placeholder="A koi pond at dusk, watercolor style…" spellcheck="true"></textarea>
+    <div class="row"><button class="btn primary" id="genGo">Generate</button><span class="fine" id="genStatus"></span></div>
+    <div id="genResult"></div>
+    <h3>Files</h3>
+    <p class="fine">Make or combine PDFs, and convert images, audio, video and documents. Files stay on this computer.</p>
+    <div class="row">
+      <input id="convPaths" placeholder="/path/to/file.png, /path/to/other.pdf — one per line or comma" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn" id="pickFiles">Choose…</button>
+    </div>
+    <div class="row">
+      <select id="convAction">
+        <option value="convert">Convert each file to…</option>
+        <option value="make-pdf">Make one PDF from these files</option>
+        <option value="merge-pdf">Combine these PDFs</option>
+      </select>
+      <select id="convFmt"></select>
+      <input id="convName" placeholder="output name (optional)" autocomplete="off" spellcheck="false" style="max-width:170px">
+      <button class="btn primary" id="convGo">Run</button>
+    </div>
+    <p class="form-error" id="convErr"></p>
+    <div id="convResult"></div>
+    <div class="row end"><button class="btn" id="studioClose">Done</button></div>
   </div>
 </dialog>
 

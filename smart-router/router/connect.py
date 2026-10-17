@@ -44,6 +44,18 @@ VENDORS = {
                "get_key_url": "https://platform.openai.com/api-keys"},
     "google": {"key": "GEMINI_API_KEY", "label": "Google (Gemini)",
                "get_key_url": "https://aistudio.google.com/app/apikey"},
+    # Free image/video generation keys — used by Tools > Generate, not by chat routing.
+    # probe: (url, header name, header value template) — a cheap call that proves the key works.
+    "huggingface": {"key": "HF_TOKEN", "label": "Hugging Face", "media": True,
+                    "get_key_url": "https://huggingface.co/settings/tokens",
+                    "probe": ("https://huggingface.co/api/whoami-v2", "authorization", "Bearer {k}")},
+    "together": {"key": "TOGETHER_API_KEY", "label": "Together AI", "media": True,
+                 "get_key_url": "https://api.together.ai/settings/api-keys",
+                 "probe": ("https://api.together.xyz/v1/models", "authorization", "Bearer {k}")},
+    "cloudflare": {"key": "CLOUDFLARE_API_TOKEN", "label": "Cloudflare Workers AI", "media": True,
+                   "get_key_url": "https://dash.cloudflare.com/profile/api-tokens",
+                   "probe": ("https://api.cloudflare.com/client/v4/user/tokens/verify",
+                             "authorization", "Bearer {k}")},
 }
 
 for _p in FREE_PROVIDERS.values():                 # free tiers: one key each, checked against the provider
@@ -69,7 +81,11 @@ async def status(request: Request):
         "free_quota": catalog.FREE.snapshot() if secrets.has("OPENROUTER_API_KEY") else None,
         "families": vendors,
         "connections": {v: {"label": d["label"], "connected": secrets.has(d["key"]), "get_key_url": d["get_key_url"]}
-                        for v, d in VENDORS.items() if not d.get("free")},
+                        for v, d in VENDORS.items() if not d.get("free") and not d.get("media")},
+        "media_providers": {v: {"label": d["label"], "connected": secrets.has(d["key"]),
+                                "get_key_url": d["get_key_url"], "needs_account_id": v == "cloudflare",
+                                "account_id": bool(secrets.has("CLOUDFLARE_ACCOUNT_ID")) if v == "cloudflare" else None}
+                            for v, d in VENDORS.items() if d.get("media")},
         "free_providers": [{"id": fp.id, "label": fp.label, "connected": secrets.has(fp.key_env),
                             "get_key_url": fp.get_key_url, "trains": fp.trains, "limits": fp.limits,
                             "note": fp.note, "checked": fp.checked, "source": fp.source}
@@ -240,6 +256,8 @@ def detect_vendor(key: str) -> str | None:
         return free
     if k.startswith("sk-or-"):
         return "openrouter"
+    if k.startswith("hf_"):
+        return "huggingface"
     if k.startswith("sk-ant-"):
         return "anthropic"
     if k.startswith("AIza"):
@@ -316,11 +334,18 @@ async def _connect(vendor: str, raw_key: str, request: Request, workspace_id: st
         secrets.delete("ANTHROPIC_WORKSPACE_ID")          # a new key starts clean
         if ws:
             secrets.set("ANTHROPIC_WORKSPACE_ID", ws)
+    if vendor == "cloudflare" and ws:                     # Workers AI calls need the account id too
+        secrets.set("CLOUDFLARE_ACCOUNT_ID", ws)
     secrets.set(name, key)
     try:
         if vendor == "openrouter":
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get("https://openrouter.ai/api/v1/key", headers={"authorization": f"Bearer {key}"})
+                r.raise_for_status()
+        elif VENDORS[vendor].get("probe"):
+            url, hname, hval = VENDORS[vendor]["probe"]
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(url, headers={hname: hval.format(k=key)})
                 r.raise_for_status()
         elif vendor in FREE_PROVIDERS:
             ids = await asyncio.to_thread(catalog.discover_free, vendor)

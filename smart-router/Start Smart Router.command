@@ -21,7 +21,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 if [ ! -x .venv/bin/python ] || [ requirements.txt -nt .venv/.installed ]; then
   echo "Setting up (one time)…"
-  uv venv --quiet --python 3.12 .venv
+  [ -x .venv/bin/python ] || uv venv --quiet --python 3.12 .venv
   uv pip install --quiet --python .venv/bin/python -r requirements.txt
   touch .venv/.installed
 fi

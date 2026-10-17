@@ -43,6 +43,9 @@ Promptaro, answer from these facts only (don't invent features):
   NVIDIA NIM, Mistral, Codestral, Cohere) each take one free key;
   Promptaro tracks each one's limits and shows what's left today. Providers that may train on prompts are only used
   for chats unless the user allows them for code. A daily $ budget caps all paid spend.
+- Studio (sidebar): generates images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI,
+  Cloudflare Workers AI, and Pollinations which needs no key — best-first, and converts files locally: make or
+  combine PDFs, convert images/audio/video/documents between formats. Nothing is uploaded anywhere.
 - Coding tools (sidebar): run Claude Code, Aider, Cline, Continue or OpenCode on these models through Promptaro's
   local gateway. `promptaro-claude` starts Claude Code through it; `promptaro-aider` starts Aider;
   `eval "$(promptaro-env)"` sets the variables for any other tool (the old `tw-*` commands still work).

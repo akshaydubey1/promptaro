@@ -617,6 +617,16 @@ async function openConnections() {
     const sub = v === "openrouter" ? "One sign-in for Claude, GPT, Gemini and more" : "Optional direct connection, no OpenRouter fee";
     return `<div class="conn-row"><span class="dot ${c.connected ? "on" : ""}"></span><span class="grow"><strong>${esc(c.label)}</strong><br><span class="sub">${sub}</span></span>${right}</div>`;
   });
+  const media = Object.entries(s.media_providers || {});
+  if (media.length) {
+    rows.push(`<div class="free-head"><h3>Image &amp; video keys</h3><span class="fine">Free accounts used by Studio → Generate. Pollinations works with no key at all.</span></div>`);
+    rows.push(media.map(([v, c]) => {
+      const right = c.connected ? `<span class="sub">Connected</span><button class="btn" data-off="${v}">Disconnect</button>`
+        : `<a class="btn" href="${esc(c.get_key_url)}" target="_blank" rel="noopener">Get free key</a><input type="password" autocomplete="off" placeholder="Paste key" data-key="${v}"><button class="btn" data-on="${v}">Connect</button>`;
+      const extra = c.needs_account_id ? `<br><input autocomplete="off" spellcheck="false" placeholder="Account ID (dash.cloudflare.com → right side)" data-acct="${v}" style="margin-top:6px">` : "";
+      return `<div class="conn-row"><span class="dot ${c.connected ? "on" : ""}"></span><span class="grow"><strong>${esc(c.label)}</strong><br><span class="sub">Free tier — powers image${v === "huggingface" ? " and video" : ""} generation</span>${extra}</span>${right}</div>`;
+    }).join(""));
+  }
   let subs = { claude_code: {}, codex: {} };
   try { subs = await api("/api/subscriptions"); } catch {}
   const planRow = (x, title, tool, how, url) => `<div class="conn-row"><span class="dot ${x.subscription ? "on" : ""}"></span><span class="grow"><strong>${title}</strong><br><span class="sub">${
@@ -725,7 +735,8 @@ $("connBody").addEventListener("click", async (e) => {
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on) {
     const inp = $("connBody").querySelector(`[data-key="${on}"]`); const k = inp.value.trim(); inp.value = "";
-    return connectKey(`/connect/${on}`, k, e.target);
+    const acct = $("connBody").querySelector(`[data-acct="${on}"]`);
+    return connectKey(`/connect/${on}`, k, e.target, acct ? acct.value.trim() : "");
   }
   if (off) {
     try { await api(`/connect/${off}`, { method: "DELETE" }); connMsg("ok", "Disconnected and removed from storage."); }
@@ -862,6 +873,80 @@ $("restartBtn").onclick = async () => {
   toast("Couldn't restart automatically. Close the Terminal window and open Promptaro again.", 8000);
 };
 setInterval(checkUpdate, 30000);
+
+/* ---------------- studio (generate + file tools) ---------------- */
+const CONV_FMTS = {
+  "convert": [],
+  "make-pdf": [],
+  "merge-pdf": [],
+};
+function fillFormats() {
+  const a = $("convAction").value, c = S.toolCaps?.convert || {};
+  const groups = a === "convert"
+    ? [["Audio", c.audio_formats], ["Video", c.video_formats], ["Image", c.image_formats], ["Document", c.doc_formats]]
+    : [];
+  $("convFmt").innerHTML = groups.map(([g, fs]) => fs && fs.length ? `<optgroup label="${g}">${fs.map((f) => `<option>${f}</option>`).join("")}</optgroup>` : "").join("");
+  $("convFmt").disabled = a !== "convert";
+  $("convName").style.display = a === "convert" ? "none" : "";
+}
+async function openStudio() {
+  $("convErr").textContent = "";
+  try {
+    S.toolCaps = await api("/api/tools/capabilities");
+    const c = S.toolCaps.convert, media = S.toolCaps.media || [];
+    const connected = media.filter((m) => m.connected).map((m) => m.label);
+    const video = media.some((m) => m.connected && m.kinds.includes("video"));
+    $("studioCaps").textContent =
+      `Images: ${connected.length ? connected.join(", ") : "no keys yet — Pollinations works without one"}. ` +
+      `Video: ${video ? "Hugging Face (free)" : "needs a free Hugging Face token (Connections → Image & video keys)"}. ` +
+      `Convert: ${c.ffmpeg ? "audio+video ✓" : "audio/video needs ffmpeg"}${c.pandoc ? ", pandoc ✓" : ""}.`;
+  } catch { $("studioCaps").textContent = ""; }
+  fillFormats();
+  if (!$("studioDlg").open) $("studioDlg").showModal();
+}
+$("studioBtn").onclick = openStudio;
+$("studioClose").onclick = () => $("studioDlg").close();
+$("convAction").onchange = fillFormats;
+$("pickFiles").onclick = async () => {
+  try {
+    const r = await api("/api/tools/pick-files", { method: "POST" });
+    if (r.paths && r.paths.length) $("convPaths").value = [$("convPaths").value, ...r.paths].filter(Boolean).join("\n");
+  } catch (e) { toast(e.message); }
+};
+function convInputPaths() {
+  return $("convPaths").value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+}
+$("genGo").onclick = async () => {
+  const prompt = $("genPrompt").value.trim();
+  if (!prompt) return $("genPrompt").focus();
+  const b = $("genGo"); b.disabled = true; b.textContent = "Generating…";
+  $("genStatus").textContent = "trying the free providers — the first one that answers wins";
+  $("genResult").innerHTML = "";
+  try {
+    const r = await api("/api/tools/generate", { method: "POST", body: { kind: $("genKind").value, prompt, size: $("genSize").value } });
+    const tag = r.kind === "video" || r.file.endsWith(".mp4") || r.file.endsWith(".webm")
+      ? `<video src="${r.url}" controls autoplay muted loop style="max-width:100%;border-radius:8px"></video>`
+      : `<img src="${r.url}" alt="generated" style="max-width:100%;border-radius:8px">`;
+    $("genResult").innerHTML = `${tag}<p class="fine">made by ${esc(r.provider)} · <a href="${r.url}" download>download</a> · <a href="#" data-reveal="${esc(r.file)}">show in folder</a></p>`;
+    $("genStatus").textContent = "";
+  } catch (e) { $("genStatus").textContent = ""; $("genResult").innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
+  finally { b.disabled = false; b.textContent = "Generate"; }
+};
+$("convGo").onclick = async () => {
+  const inputs = convInputPaths();
+  if (!inputs.length) { $("convErr").textContent = "Add at least one file path."; return; }
+  const b = $("convGo"); b.disabled = true; $("convErr").textContent = ""; $("convResult").innerHTML = "";
+  try {
+    const r = await api("/api/tools/convert", { method: "POST", body: { action: $("convAction").value, inputs, format: $("convFmt").value, name: $("convName").value.trim() } });
+    $("convResult").innerHTML = r.outputs.map((o) =>
+      `<p class="fine">✓ <b>${esc(o.name)}</b> (${(o.bytes / 1024).toFixed(0)} KB) — <a href="${o.url}" download>download</a> · <a href="#" data-reveal="${esc(o.name)}">show in folder</a></p>`).join("");
+  } catch (e) { $("convErr").textContent = e.message; }
+  finally { b.disabled = false; }
+};
+$("studioDlg").addEventListener("click", async (e) => {
+  const rv = e.target.closest("[data-reveal]");
+  if (rv) { e.preventDefault(); try { await api("/api/tools/reveal", { method: "POST", body: { path: rv.dataset.reveal } }); } catch (x) { toast(x.message); } }
+});
 
 /* ---------------- boot ---------------- */
 (async function boot() {

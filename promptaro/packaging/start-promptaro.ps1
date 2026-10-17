@@ -41,7 +41,7 @@ $stampTime = [datetime]::MinValue                              # a missing stamp
 if (Test-Path $stamp) { $stampTime = (Get-Item $stamp).LastWriteTime }
 if (-not (Test-Path $py) -or (Get-Item "requirements.txt").LastWriteTime -gt $stampTime) {
   Write-Host "Setting up Promptaro (one time)..."
-  uv venv --quiet --python 3.12 .venv *>> $Log
+  if (-not (Test-Path $py)) { uv venv --quiet --python 3.12 .venv *>> $Log }
   uv pip install --quiet --python $py -r requirements.txt *>> $Log
   New-Item -ItemType File -Force -Path $stamp | Out-Null
 }

@@ -10,6 +10,8 @@ import asyncio
 import json
 import os
 import platform
+import re
+import secrets as pysecrets
 import shutil
 import subprocess
 import sys
@@ -38,7 +40,7 @@ from .build import build  # noqa: E402
 from .desk import Desk  # noqa: E402
 from .store import Store  # noqa: E402
 
-from router import migrate  # noqa: E402
+from router import migrate, secrets  # noqa: E402
 
 STARTED_BUILD = build()        # code version this process loaded
 DATA = migrate.home()
@@ -611,6 +613,134 @@ async def rename_project(b: ProjName):
     else:
         names.pop(b.path, None)
     set_settings(project_names=names)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------ file tools
+def _tools_out() -> Path:
+    d = DATA / "tools_out"
+    _private_dir(d)
+    return d
+
+
+@app.get("/api/tools/capabilities")
+async def tools_capabilities():
+    """What the Studio can do right now: converters present, media providers connected."""
+    from . import convert
+    from router import media
+    return {"convert": convert.capabilities(), "media": media.status()}
+
+
+class GenBody(BaseModel):
+    kind: Literal["image", "video"] = "image"
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    size: Literal["square", "portrait", "landscape", "hd"] = "square"
+
+
+_GEN_SIZES = {"square": (1024, 1024), "portrait": (768, 1152), "landscape": (1152, 768), "hd": (1280, 720)}
+_MIME_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+             "video/mp4": "mp4", "video/webm": "webm"}
+
+
+@app.post("/api/tools/generate")
+async def tool_generate(b: GenBody):
+    """Free-tier image/video generation; tries each connected provider best-first."""
+    from router import media
+    w, h = _GEN_SIZES[b.size]
+    try:
+        data, mime, provider = await asyncio.to_thread(media.generate, b.kind, b.prompt, w, h)
+    except Exception as e:
+        raise HTTPException(400, secrets.redact(str(e))[:400])
+    name = f"{b.kind}-{pysecrets.token_hex(4)}.{_MIME_EXT.get(mime, 'png' if b.kind == 'image' else 'mp4')}"
+    (_tools_out() / name).write_bytes(data)
+    return {"file": name, "url": f"/api/tools/output/{name}", "provider": provider,
+            "bytes": len(data)}
+
+
+@app.post("/api/tools/pick-files")
+async def tool_pick_files():
+    """The system's own file chooser; returns real paths on this machine."""
+    system = platform.system()
+    if system == "Darwin":
+        script = ('set f to choose file with prompt "Choose files" with multiple selections allowed\n'
+                  'set o to ""\nrepeat with i in f\nset o to o & POSIX path of i & "\\n"\nend repeat\no')
+        cmd = ["osascript", "-e", script]
+    elif system == "Windows":
+        cmd = ["powershell", "-NoProfile", "-STA", "-Command",
+               "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; "
+               "$d.Multiselect = $true; if ($d.ShowDialog() -eq 'OK') { $d.FileNames -join \"`n\" }"]
+    elif shutil.which("zenity"):
+        cmd = ["zenity", "--file-selection", "--multiple", "--separator=\n", "--title=Choose files"]
+    elif shutil.which("kdialog"):
+        cmd = ["kdialog", "--getopenfilename", str(Path.home()), "*", "--multiple", "--separate-output"]
+    else:
+        raise HTTPException(501, "Type or paste the file paths.")
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return {"paths": []}
+    return {"paths": [p for p in out.decode().splitlines() if p.strip()]}
+
+
+class ConvertBody(BaseModel):
+    action: Literal["make-pdf", "merge-pdf", "convert"] = "convert"
+    inputs: list[str] = Field(..., min_length=1)
+    format: str = ""                            # required for action=convert
+    name: str = ""                              # output filename base for make-pdf / merge-pdf
+
+
+@app.post("/api/tools/convert")
+async def tool_convert(b: ConvertBody):
+    from . import convert
+    try:
+        inputs = convert.resolve_inputs(b.inputs)
+        out_dir = _tools_out()
+        if b.action == "make-pdf":
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or inputs[0].stem).strip())[:60] or "document"
+            out = await asyncio.to_thread(convert.make_pdf, inputs, out_dir / f"{slug}.pdf")
+            results = [out]
+        elif b.action == "merge-pdf":
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or "combined").strip())[:60] or "combined"
+            out = await asyncio.to_thread(convert.merge_pdfs, inputs, out_dir / f"{slug}.pdf")
+            results = [out]
+        else:
+            fmt = re.sub(r"[^a-z0-9]", "", b.format.lower())
+            if not fmt:
+                raise HTTPException(400, "Choose a target format.")
+            results = [await asyncio.to_thread(convert.convert, p, out_dir, fmt) for p in inputs]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, secrets.redact(str(e))[:300])
+    return {"outputs": [{"name": p.name, "url": f"/api/tools/output/{p.name}",
+                         "bytes": p.stat().st_size} for p in results]}
+
+
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+@app.get("/api/tools/output/{name}")
+async def tool_output(name: str):
+    if not _SAFE_NAME.match(name):
+        raise HTTPException(404)
+    p = (_tools_out() / name).resolve()
+    if not p.is_file() or _tools_out() not in p.parents:
+        raise HTTPException(404)
+    return FileResponse(p, filename=name)
+
+
+@app.post("/api/tools/reveal")
+async def tool_reveal(b: ProjName):
+    """Show an output file in the system file manager."""
+    if not _SAFE_NAME.match(b.path):
+        raise HTTPException(404)
+    p = (_tools_out() / b.path).resolve()
+    if not p.is_file() or _tools_out() not in p.parents:
+        raise HTTPException(404)
+    system = platform.system()
+    cmd = {"Darwin": ["open", "-R", str(p)], "Windows": ["explorer", "/select,", str(p)]}.get(system) \
+        or ["xdg-open", str(p.parent)]
+    await asyncio.create_subprocess_exec(*cmd)
     return {"ok": True}
 
 
