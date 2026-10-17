@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+os.environ.setdefault("PROMPTARO_NO_MIGRATE", "1")   # never move real ~/.tillwright in tests
+
 HERE = Path(__file__).resolve().parent
 ROUTER = Path(os.environ.get("SMART_ROUTER_ROOT", HERE.parent.parent / "smart-router")).resolve()
 sys.path.insert(0, str(ROUTER))
@@ -76,12 +78,16 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway, "_client", None)
     monkeypatch.setattr(gitops, "HOME", home / "desk")
     from desk import workers                    # ignore any real Claude Code on the test machine
-    monkeypatch.setenv("TILLWRIGHT_CLAUDE_BIN", str(home / "no-claude"))
-    monkeypatch.setenv("TILLWRIGHT_CODEX_BIN", str(home / "no-codex"))
+    for n in ("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"):
+        monkeypatch.setenv(n, str(home / "no-claude"))
+    for n in ("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"):
+        monkeypatch.setenv(n, str(home / "no-codex"))
     monkeypatch.setattr(workers, "_status_cache", {})
     monkeypatch.setattr(workers, "_rest_until", {})
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("PROMPTARO_HOME", str(home / "desk"))
     monkeypatch.setenv("TILLWRIGHT_HOME", str(home / "desk"))
+    monkeypatch.setenv("PROMPTARO_DB", str(home / "desk.db"))
     monkeypatch.setenv("TILLWRIGHT_DB", str(home / "desk.db"))
     monkeypatch.setenv("ROUTER_DB", str(home / "router.db"))
     # Make `python` / `python3` in agent commands resolve to this interpreter (with pytest).

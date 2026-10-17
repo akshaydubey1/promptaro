@@ -1,6 +1,9 @@
-# Tillwright
+# Promptaro
 
 Author: Akshay Dubey
+
+*Promptaro was previously called Promptaro. Existing installs keep working: settings, keys,
+sessions and `tw-*` launchers are read and migrated automatically.*
 
 Chat with any AI model, and hand coding tasks to agents that work on your repos
 in parallel, each on its own branch, until you review and merge. Every answer
@@ -12,13 +15,13 @@ one when a step fails.
 
 | | |
 |---|---|
-| **Mac** | Double-click **Install Tillwright.command** once. Tillwright.app appears in Applications (and Launchpad and Spotlight); drag it to the Dock. Or double-click **Start Tillwright.command** to run it in a Terminal window. |
-| **Windows** | Double-click **Install Tillwright.bat** once for a Start-menu and desktop shortcut, or **Start Tillwright.bat** to run it. |
+| **Mac** | Double-click **Install Promptaro.command** once. Promptaro.app appears in Applications (and Launchpad and Spotlight); drag it to the Dock. Or double-click **Start Promptaro.command** to run it in a Terminal window. |
+| **Windows** | Double-click **Install Promptaro.bat** once for a Start-menu and desktop shortcut, or **Start Promptaro.bat** to run it. |
 | **Linux** | Run `packaging/install-linux.sh` once for an app-menu entry, or `./launch.sh`. |
 
 The first start installs what it needs (about a minute). It opens in its own window if Chrome, Edge or Brave is
 installed, otherwise in your browser. It keeps running in the background after the window closes, so it opens
-instantly next time; **Connections → Quit Tillwright** stops it.
+instantly next time; **Connections → Quit Promptaro** stops it.
 
 **First run** shows three steps, each with its live status:
 1. **Sign in with OpenRouter** — a free account that unlocks every model family and 50 free requests a day.
@@ -44,13 +47,13 @@ instantly next time; **Connections → Quit Tillwright** stops it.
 Connect free keys from **Groq, Cerebras, NVIDIA NIM** (don't train on prompts), **Mistral, Codestral** (may train)
 or **Cohere** in Connections. Each row shows the provider's free limits and what you've used today.
 
-Then open **Coding tools** in the sidebar and click **Add tw-claude, tw-aider and tw-env**:
+Then open **Coding tools** in the sidebar and click **Add promptaro-claude, promptaro-aider and promptaro-env**:
 
 | Command | What it does |
 |---|---|
-| `tw-claude` | Starts Claude Code on Tillwright's models (not your Claude subscription) |
-| `tw-aider` | Starts Aider the same way |
-| `eval "$(tw-env)"` | Sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and the token for any other tool (Cline, Continue, OpenCode, Zed) |
+| `promptaro-claude` | Starts Claude Code on Promptaro's models (not your Claude subscription) |
+| `promptaro-aider` | Starts Aider the same way |
+| `eval "$(promptaro-env)"` | Sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and the token for any other tool (Cline, Continue, OpenCode, Zed) |
 
 How each request is handled, in under a millisecond and without calling a model:
 1. **Difficulty** is scored locally. The model name the tool asks for is a hint (haiku = quick housekeeping, opus = hardest).
@@ -59,7 +62,7 @@ How each request is handled, in under a millisecond and without calling a model:
    own rate-limit headers, and skips any model the request can't fit (a 25k-token Claude Code turn never goes to a
    model allowed 8k tokens a minute).
 4. A model that refuses (rate limit, outage) is paused and the next one answers **before any text is sent**. When only
-   a per-minute allowance is in the way, Tillwright waits the few seconds rather than failing.
+   a per-minute allowance is in the way, Promptaro waits the few seconds rather than failing.
 5. By default coding tools **never spend money**; Coding tools → Spending can allow paid models when free ones can't.
 
 The gateway listens on 127.0.0.1 only and every request needs its token (kept in the system keychain, fetched by
@@ -71,7 +74,7 @@ paid model; every request shows which model answered.
 
 ## Uses the subscriptions you already pay for
 
-Tillwright checks this computer for the two official coding tools that run on a plan:
+Promptaro checks this computer for the two official coding tools that run on a plan:
 
 | Plan | Tool | How it's detected |
 |---|---|---|
@@ -79,11 +82,11 @@ Tillwright checks this computer for the two official coding tools that run on a 
 | ChatGPT Plus / Pro / Business | **Codex CLI** | `codex login status` reports "Logged in using ChatGPT" |
 
 When either is signed in, **hard agent tasks** run on that plan instead of per-use API billing. If a plan hits its
-usage limit, Tillwright rests it for an hour and hands the task to the other plan, or to the regular models if
+usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to the regular models if
 neither has room. Nothing to configure: Connections shows what was detected, and the Model menu lets you pick a
 plan for a task.
 
-Tillwright never reads or stores either login. It runs the unmodified `claude` or `codex` program in the task's
+Promptaro never reads or stores either login. It runs the unmodified `claude` or `codex` program in the task's
 own branch and shows its progress. Claude Code may only edit files and run tests and linters on its own (pushes,
 deletes, network and deploy commands are refused). Codex runs in its `workspace-write` sandbox: it can change files
 inside the task's copy only, with no network.
@@ -91,7 +94,7 @@ inside the task's copy only, with no network.
 ## Free models and their limits
 
 Free models come from OpenRouter. OpenRouter allows **20 requests a minute** and **50 a day**, or **1000 a day** once
-$10 of credit has ever been bought. Tillwright reads your allowance from OpenRouter, counts down as you use it, and
+$10 of credit has ever been bought. Promptaro reads your allowance from OpenRouter, counts down as you use it, and
 shows "Free requests left today" in Connections and Savings. When the allowance runs out or a free model is
 rate-limited, routing skips free models (until midnight UTC, or for a minute) and paid models fill in with no error.
 By default free models are used for chats only, since some free providers may keep prompts; agents on private code
@@ -119,11 +122,11 @@ use paid models unless you choose **Chats and agents**.
 ```
 desk/agent.py     agent loop, per-step routing, escalation, compaction
 desk/workers.py   Claude Code and Codex CLI on your subscriptions
-desk/launchers.py tw-claude, tw-aider, tw-env
+desk/launchers.py promptaro-claude, promptaro-aider, promptaro-env (+ tw-* shims)
 desk/tools.py     list/read/search/write/edit/run + command approval policy
 desk/gitops.py    worktrees, diff, commit, merge, PR, discard
 desk/desk.py      sessions: chats and agents, many at once
-desk/store.py     SQLite (~/.tillwright/desk.db) + live event fan-out
+desk/store.py     SQLite (~/.promptaro/desk.db, migrated from ~/.tillwright) + live event fan-out
 desk/server.py    HTTP API + live stream (SSE)
 desk/ui/          the interface
 manifest.json     how Software Hub lists this app
@@ -134,7 +137,7 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 59 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 63+ tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
 
 ## Not built yet

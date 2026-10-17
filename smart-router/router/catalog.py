@@ -20,10 +20,10 @@ from pathlib import Path
 
 import httpx
 
-from . import secrets
+from . import migrate, secrets
 from .free_providers import FAMILY_TRUST, FREE_PROVIDERS, limits_for, pick_models
 
-HOME = Path(os.environ.get("ROUTER_HOME", Path.home() / ".akshay-router"))
+HOME = migrate.home("ROUTER_HOME")          # ~/.promptaro, migrating ~/.akshay-router & ~/.tillwright
 OR_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OR_BASE = "https://openrouter.ai/api/v1"
 
@@ -35,7 +35,7 @@ DIRECT = {
                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
 }
 _SKIP = re.compile(r"(audio|image-|realtime|search|tts|embed|guard|moderation|transcribe|-instruct$|vision-preview)", re.I)
-# How much to trust each model family before Tillwright has its own results.
+# How much to trust each model family before Promptaro has its own results.
 # Unknown families start lower, so a cheap unknown model isn't chosen on price
 # alone; good results (checks passed, thumbs up) raise them over time.
 REPUTATION = {

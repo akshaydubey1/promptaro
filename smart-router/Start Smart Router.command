@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-# Akshay Smart Router launcher — Author: Akshay Dubey
+# Promptaro Smart Router launcher — Author: Akshay Dubey
 # Double-click to start. First run installs everything it needs (about a minute);
 # later runs start in a couple of seconds. Then your browser opens the app.
 set -e
@@ -26,6 +26,6 @@ if [ ! -x .venv/bin/python ] || [ requirements.txt -nt .venv/.installed ]; then
   touch .venv/.installed
 fi
 
-echo "Smart Router is running at $URL  (close this window to stop it)"
+echo "Promptaro Smart Router is running at $URL  (close this window to stop it)"
 ( for i in $(seq 1 40); do curl -fsS "$URL/healthz" >/dev/null 2>&1 && { open_url "$URL"; break; }; sleep 0.25; done ) &
 exec .venv/bin/python -m uvicorn router.api:app --host 127.0.0.1 --port "$PORT" --log-level warning

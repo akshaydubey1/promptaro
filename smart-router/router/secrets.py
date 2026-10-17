@@ -6,8 +6,9 @@ Windows Credential Manager, Linux Secret Service) via `keyring`. Nothing is
 written to the project folder. Order of lookup:
 
   1. environment variable (lets Docker/CI keep working)
-  2. OS keychain
-  3. ~/.akshay-router/credentials.json (0600) — only if no keychain exists
+  2. OS keychain (service "promptaro"; Tillwright-era "akshay-smart-router" is
+     still read so existing installs keep working)
+  3. ~/.promptaro/credentials.json (0600) — only if no keychain exists
 
 Values are never logged or returned by the API; only "connected: yes/no".
 """
@@ -19,8 +20,11 @@ import stat
 import threading
 from pathlib import Path
 
-SERVICE = "akshay-smart-router"
-_FALLBACK = Path(os.environ.get("ROUTER_HOME", Path.home() / ".akshay-router")) / "credentials.json"
+SERVICE = "promptaro"
+_LEGACY_SERVICE = "akshay-smart-router"
+_FALLBACK = Path(os.environ.get("PROMPTARO_HOME") or os.environ.get("ROUTER_HOME")
+                 or Path.home() / ".promptaro") / "credentials.json"
+_LEGACY_FALLBACK = Path(os.environ.get("ROUTER_HOME") or Path.home() / ".akshay-router") / "credentials.json"
 _lock = threading.Lock()
 
 try:
@@ -64,11 +68,20 @@ def get(name: str) -> str:
     if v:
         return v
     if _kr_ok:
-        try:
-            return keyring.get_password(SERVICE, name) or ""
-        except KeyringError:
-            pass
-    return _file_read().get(name, "")
+        for service in (SERVICE, _LEGACY_SERVICE):
+            try:
+                v = keyring.get_password(service, name)
+            except KeyringError:
+                v = None
+            if v:
+                return v
+        return ""
+    if v := _file_read().get(name):                            # noqa: E501 — read fallback file first
+        return v
+    try:
+        return json.loads(_LEGACY_FALLBACK.read_text()).get(name, "")
+    except Exception:
+        return ""
 
 
 def set(name: str, value: str) -> None:  # noqa: A001
@@ -76,6 +89,10 @@ def set(name: str, value: str) -> None:  # noqa: A001
         if _kr_ok:
             try:
                 keyring.set_password(SERVICE, name, value)
+                try:
+                    keyring.delete_password(_LEGACY_SERVICE, name)   # shadow the old entry next time
+                except Exception:
+                    pass
                 return
             except KeyringError:
                 pass
@@ -87,10 +104,11 @@ def set(name: str, value: str) -> None:  # noqa: A001
 def delete(name: str) -> None:
     with _lock:
         if _kr_ok:
-            try:
-                keyring.delete_password(SERVICE, name)
-            except Exception:
-                pass
+            for service in (SERVICE, _LEGACY_SERVICE):
+                try:
+                    keyring.delete_password(service, name)
+                except Exception:
+                    pass
         d = _file_read()
         if d.pop(name, None) is not None:
             _file_write(d)

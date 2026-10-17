@@ -1,4 +1,4 @@
-# Akshay Smart Router
+# Promptaro Smart Router
 
 Author: Akshay Dubey
 
@@ -50,7 +50,7 @@ OpenRouter's public model list and refreshed daily.
 
 - Sign-in uses OpenRouter's standard OAuth (PKCE). The key it issues is stored in
   your **macOS Keychain** (service name `akshay-smart-router`), never in the project folder.
-  Without a system keychain it falls back to `~/.akshay-router/credentials.json` with owner-only permissions.
+  Without a system keychain it falls back to `~/.promptaro/credentials.json` (legacy `~/.akshay-router` is migrated) with owner-only permissions.
 - The app never displays or returns a stored key. **Disconnect** deletes it.
   You can also revoke it any time from your OpenRouter account.
 - The server only listens on `127.0.0.1` and rejects requests addressed to any other host name.

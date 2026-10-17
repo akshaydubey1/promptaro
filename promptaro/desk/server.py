@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-"""Tillwright HTTP server. Author: Akshay Dubey
+"""Promptaro HTTP server. Author: Akshay Dubey
 
 Runs locally (127.0.0.1). Serves the UI, the Smart Router's sign-in/connections
 endpoints, and the chat/agent API with a live event stream (SSE).
@@ -37,8 +37,10 @@ from .build import build  # noqa: E402
 from .desk import Desk  # noqa: E402
 from .store import Store  # noqa: E402
 
+from router import migrate  # noqa: E402
+
 STARTED_BUILD = build()        # code version this process loaded
-DATA = Path(os.environ.get("TILLWRIGHT_HOME", Path.home() / ".tillwright"))
+DATA = migrate.home("TILLWRIGHT_HOME")
 desk: Desk | None = None
 
 
@@ -49,8 +51,9 @@ async def lifespan(app: FastAPI):
     _private_dir(gitops.HOME / "worktrees")
     router = Router(Path(os.environ.get("SMART_ROUTER_ROOT", ROUTER_ROOT)), db_path=os.environ.get("ROUTER_DB"))
     app.state.router = router
-    desk = Desk(router, Store(os.environ.get("TILLWRIGHT_DB", DATA / "desk.db")))
-    if "TILLWRIGHT_DB" not in os.environ:
+    desk = Desk(router, Store(os.environ.get("PROMPTARO_DB") or os.environ.get("TILLWRIGHT_DB")
+                              or DATA / "desk.db"))
+    if "PROMPTARO_DB" not in os.environ and "TILLWRIGHT_DB" not in os.environ:
         _private_file(DATA / "desk.db")
     yield
     for t in list(desk.tasks.values()):
@@ -58,7 +61,7 @@ async def lifespan(app: FastAPI):
     await router.aclose()
 
 
-app = FastAPI(title="Tillwright", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Promptaro", version="0.1.0", lifespan=lifespan)
 _hosts = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",")
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=[h.strip() for h in _hosts if h.strip()])
 
@@ -82,7 +85,7 @@ async def require_app_header(request: Request, call_next):
     if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path.startswith(("/api/", "/connect/")) \
             and request.headers.get("x-tillwright") != "1" and request.headers.get("x-promptaro") != "1":
         from fastapi.responses import JSONResponse
-        return JSONResponse({"detail": "Missing X-Tillwright header"}, status_code=403)
+        return JSONResponse({"detail": "Missing X-Promptaro header"}, status_code=403)
     return await call_next(request)
 
 
@@ -138,7 +141,7 @@ async def restart():
 
 @app.post("/api/quit")
 async def quit_app():
-    """Stop Tillwright (it otherwise keeps running in the background after the window closes)."""
+    """Stop Promptaro (it otherwise keeps running in the background after the window closes)."""
     for t in list(desk.tasks.values()):
         t.cancel()
     asyncio.get_running_loop().call_later(0.3, os._exit, 0)
@@ -328,7 +331,7 @@ class CommitBody(BaseModel):
 async def commit(sid: str, b: CommitBody):
     s = _s(sid)
     try:
-        sha = await gitops.commit(s["worktree"], b.message or f"{s['title']}\n\nMade with Tillwright")
+        sha = await gitops.commit(s["worktree"], b.message or f"{s['title']}\n\nMade with Promptaro")
     except gitops.GitError as e:
         raise HTTPException(400, str(e))
     desk.store.emit(sid, "git", {"text": f"Committed {sha} on {s['branch']}"})
@@ -339,7 +342,7 @@ async def commit(sid: str, b: CommitBody):
 async def merge(sid: str):
     s = _s(sid)
     try:
-        await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Tillwright")
+        await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Promptaro")
         sha = await gitops.merge_into_base(s["repo"], s["branch"], s["base_branch"])
     except gitops.GitError as e:
         raise HTTPException(400, str(e))
@@ -354,7 +357,7 @@ async def pr(sid: str):
     s = _s(sid)
     summary = next((e["data"].get("summary", "") for e in reversed(desk.store.events(sid)) if e["kind"] == "finish"), "")
     try:
-        await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Tillwright")
+        await gitops.commit(s["worktree"], f"{s['title']}\n\nMade with Promptaro")
         url = await gitops.open_pr(s["worktree"], s["branch"], s["title"], summary or s["title"])
     except gitops.GitError as e:
         raise HTTPException(400, str(e))
@@ -450,7 +453,7 @@ async def gateway_info(request: Request):
     base = f"http://127.0.0.1:{port}"
     st = catalog.get_settings()
     d = launchers.bin_dir()
-    return {"base_url": base, "openai_base_url": f"{base}/v1", "model": "tillwright-auto",
+    return {"base_url": base, "openai_base_url": f"{base}/v1", "model": "promptaro-auto",
             "spend": st.get("gateway_spend", "free"), "free_models": st.get("free_models", "chat"),
             "launchers": {"installed": launchers.installed(), "dir": str(d), "on_path": launchers.on_path(d)},
             "claude_installed": bool(find_claude()), "aider_installed": bool(shutil.which("aider")),

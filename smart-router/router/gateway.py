@@ -49,7 +49,7 @@ _client: httpx.AsyncClient | None = None
 def gateway_token() -> str:
     t = secrets.get(TOKEN_KEY)
     if not t:
-        t = "tw-" + pysecrets.token_urlsafe(32)
+        t = "pro-" + pysecrets.token_urlsafe(32)
         secrets.set(TOKEN_KEY, t)
     return t
 
@@ -471,7 +471,7 @@ def _openai_target(spec) -> tuple[str, dict]:
         headers["authorization"] = f"Bearer {key}"
     if "openrouter.ai" in base:
         headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "Tillwright"
+        headers["X-Title"] = "Promptaro"
     return f"{base}/chat/completions", headers
 
 
@@ -517,7 +517,7 @@ def _all_failed(tried: list, anthropic: bool = True):
     if any(tr for _, tr in tried):
         msg = "Every model that could take this request is busy or rate-limited just now: " + why
         return _anthropic_error(529, "overloaded_error", msg) if anthropic else _openai_error(503, "all_busy", msg)
-    msg = ("Tillwright: the connected models refused this request (check the keys in Tillwright → Connections): "
+    msg = ("Promptaro: the connected models refused this request (check the keys in Promptaro → Connections): "
            + why)
     return _anthropic_error(400, "invalid_request_error", msg) if anthropic else _openai_error(400, "all_refused", msg)
 
@@ -538,11 +538,18 @@ def _router(request: Request):
     return request.app.state.router
 
 
+def _model_headers(spec) -> dict:
+    """Which model actually answered. Sent under both names: Promptaro-era clients read the
+    new header, tools written for Tillwright keep reading the old one."""
+    return {"x-promptaro-model": spec.id, "x-promptaro-via": spec.extra.get("via", ""),
+            "x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+
+
 # ================================================================ endpoints
 @api.get("/v1/models")
 async def models(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     reg = _router(request).registry
     settings = catalog.get_settings()
     free_only = settings.get("gateway_spend", "free") == "free"
@@ -552,20 +559,24 @@ async def models(request: Request):
         usable = [m for m in usable if m.extra.get("free") or (m.price_in == 0 and m.price_out == 0)]
     if mode != "all":
         usable = [m for m in usable if not (m.extra.get("free") and m.extra.get("trains"))]
-    ids = [("tillwright-auto", "Tillwright Auto (picks the model)"),
-           ("tillwright-fast", "Tillwright Fast (quick, free when possible)"),
-           ("tillwright-best", "Tillwright Best (strongest available)")] + \
+    ids = [("promptaro-auto", "Promptaro Auto (picks the model)"),
+           ("promptaro-fast", "Promptaro Fast (quick, free when possible)"),
+           ("promptaro-best", "Promptaro Best (strongest available)"),
+           # Legacy Tillwright aliases: tools configured before the rename keep working.
+           ("tillwright-auto", "Tillwright Auto → Promptaro Auto"),
+           ("tillwright-fast", "Tillwright Fast → Promptaro Fast"),
+           ("tillwright-best", "Tillwright Best → Promptaro Best")] + \
         [(m.id, m.extra.get("name", m.id)) for m in usable]
     if request.headers.get("anthropic-version"):
         data = [{"type": "model", "id": i, "display_name": n, "created_at": "2026-01-01T00:00:00Z"} for i, n in ids]
         return {"data": data, "has_more": False, "first_id": data[0]["id"], "last_id": data[-1]["id"]}
-    return {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "tillwright"} for i, _ in ids]}
+    return {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "promptaro"} for i, _ in ids]}
 
 
 @api.post("/v1/messages/count_tokens")
 async def count_tokens(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     body = await request.json()
     return {"input_tokens": estimate_tokens({k: body.get(k) for k in ("system", "messages", "tools")})}
 
@@ -573,12 +584,12 @@ async def count_tokens(request: Request):
 @api.post("/v1/messages")
 async def messages(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token. "
-                                "Start your tool with Tillwright's launcher, or copy the token from "
-                                "Tillwright → Coding tools.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token. "
+                                "Start your tool with Promptaro's launcher, or copy the token from "
+                                "Promptaro → Coding tools.")
     router = _router(request)
     body = await request.json()
-    requested = str(body.get("model") or "tillwright-auto")
+    requested = str(body.get("model") or "promptaro-auto")
     est_in = estimate_tokens({k: body.get(k) for k in ("system", "messages", "tools")})
     want_out = int(body.get("max_tokens") or 4096)
     has_images = any(isinstance(b, dict) and b.get("type") == "image" for m in body.get("messages") or []
@@ -588,9 +599,9 @@ async def messages(request: Request):
                                requested=requested)
     if not cands:
         # Not a momentary overload, so don't invite the client to retry: say what to do.
-        return _anthropic_error(400, "invalid_request_error", "Tillwright: no connected model can take this request "
+        return _anthropic_error(400, "invalid_request_error", "Promptaro: no connected model can take this request "
                                 "right now. The free models' limits may be used up or the request may be too large "
-                                "for them. Add a free provider in Tillwright → Connections, allow paid models in "
+                                "for them. Add a free provider in Promptaro → Connections, allow paid models in "
                                 "Coding tools, or try again later.")
     stream = bool(body.get("stream"))
     stick = _stick_key(body.get("messages") or [], bool(body.get("tools")))
@@ -624,7 +635,7 @@ async def messages(request: Request):
                 u = d.get("usage") or {}
                 _account(router, spec, u.get("input_tokens", est_in), u.get("output_tokens", 0),
                          rate_headers(resp), res, stick)
-                headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+                headers = _model_headers(spec)
                 return JSONResponse(d, headers=headers)
             url, hdrs = _openai_target(spec)
             ob = anthropic_to_openai(body, short_ids=spec.extra.get("quota") in ("mistral", "codestral"))
@@ -641,8 +652,7 @@ async def messages(request: Request):
             if _gave_up(tried):
                 break
             continue
-        headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", ""),
-                   "x-tillwright-est-tokens": str(est_in)}
+        headers = {**_model_headers(spec), "x-promptaro-est-tokens": str(est_in)}
         if not stream:
             try:
                 data = resp.json()
@@ -690,7 +700,7 @@ async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_
 
 
 def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=None, stick=None):
-    headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+    headers = _model_headers(spec)
 
     async def pipe():
         tin, tout = est_in, 0
@@ -714,10 +724,10 @@ def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=
 @api.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     if not _authorized(request):
-        return _openai_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _openai_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     router = _router(request)
     body = await request.json()
-    requested = str(body.get("model") or "tillwright-auto")
+    requested = str(body.get("model") or "promptaro-auto")
     msgs = body.get("messages") or []
     est_in = estimate_tokens({"m": msgs, "t": body.get("tools")})
     want_out = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
@@ -728,7 +738,7 @@ async def chat_completions(request: Request):
              if c.provider in ("openai", "openai_compatible")]
     if not cands:
         return _openai_error(503, "no_model", "No connected model can take this request right now. Add a free "
-                             "provider or a key in Tillwright → Connections.")
+                             "provider or a key in Promptaro → Connections.")
     stream = bool(body.get("stream"))
     stick = _stick_key(msgs, bool(body.get("tools")))
     tried: list = []
@@ -755,7 +765,7 @@ async def chat_completions(request: Request):
             if _gave_up(tried):
                 break
             continue
-        headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+        headers = _model_headers(spec)
         if not stream:
             try:
                 d = resp.json()
@@ -795,6 +805,6 @@ def client_setup(base_url: str) -> dict:
         "base_url": base_url, "token": t,
         "claude_code": {"env": {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": t,
                                 "ANTHROPIC_API_KEY": ""}},
-        "openai_compatible": {"base_url": f"{base_url}/v1", "api_key": t, "model": "tillwright-auto"},
+        "openai_compatible": {"base_url": f"{base_url}/v1", "api_key": t, "model": "promptaro-auto"},
         "checked": time.strftime("%Y-%m-%d"),
     }

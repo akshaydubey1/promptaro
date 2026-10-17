@@ -20,7 +20,7 @@ HARD = ("Architect and implement a production-grade, thread-safe retry layer wit
 
 @pytest.fixture
 def codex(monkeypatch, tmp_path):
-    monkeypatch.setenv("TILLWRIGHT_CODEX_BIN", FAKE_CODEX)
+    monkeypatch.setenv("PROMPTARO_CODEX_BIN", FAKE_CODEX)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(tmp_path / "codex_call.json"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-be-passed")
     return tmp_path / "codex_call.json"
@@ -28,7 +28,7 @@ def codex(monkeypatch, tmp_path):
 
 @pytest.fixture
 def claude(monkeypatch, tmp_path):
-    monkeypatch.setenv("TILLWRIGHT_CLAUDE_BIN", FAKE_CLAUDE)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", FAKE_CLAUDE)
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude_call.json"))
     return tmp_path / "claude_call.json"
 
@@ -168,9 +168,9 @@ def test_gateway_is_mounted_and_token_protected(client):
     assert client.post("/v1/messages", json={"model": "x", "messages": []}).status_code == 401
     assert client.post("/api/gateway/token").status_code == 403            # web pages can't read it
     tok = client.post("/api/gateway/token", headers=H).json()["token"]
-    assert tok.startswith("tw-")
+    assert tok.startswith("pro-")
     models = client.get("/v1/models", headers={"authorization": f"Bearer {tok}"}).json()
-    assert models["data"][0]["id"] == "tillwright-auto"
+    assert models["data"][0]["id"] == "promptaro-auto"
     client.post("/api/gateway/rotate", headers=H)
     assert client.post("/api/gateway/token", headers=H).json()["token"] != tok
     info = client.get("/api/gateway").json()
@@ -189,13 +189,14 @@ def test_install_launchers(client, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home2"))
     r = client.post("/api/gateway/launchers", headers=H).json()
     names = sorted(Path(f).name for f in r["files"])
-    assert names == ["tw-aider", "tw-claude", "tw-env"]
+    assert names == ["promptaro-aider", "promptaro-claude", "promptaro-env", "tw-aider", "tw-claude", "tw-env"]
     for f in r["files"]:
-        assert "tw-" + "x" not in Path(f).read_text()             # the token is fetched at run time, never stored
-    claude = (tmp_path / "home2" / ".local" / "bin" / "tw-claude").read_text()
+        assert "pro-" + "x" not in Path(f).read_text()            # the token is fetched at run time, never stored
+    claude = (tmp_path / "home2" / ".local" / "bin" / "promptaro-claude").read_text()
     assert "ANTHROPIC_AUTH_TOKEN" in claude and "api/gateway/token" in claude and "Akshay Dubey" in claude
     import os
-    assert os.access(tmp_path / "home2" / ".local" / "bin" / "tw-claude", os.X_OK)
+    assert os.access(tmp_path / "home2" / ".local" / "bin" / "promptaro-claude", os.X_OK)
+    assert "promptaro-claude" in (tmp_path / "home2" / ".local" / "bin" / "tw-claude").read_text()  # legacy shim
 
 
 def test_free_status_lists_providers(client):

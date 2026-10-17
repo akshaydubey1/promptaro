@@ -6,12 +6,12 @@ Two official coding tools can run on a plan you already have:
   * Claude Code (Anthropic) — signed in with a Claude Pro/Max plan.
   * Codex CLI (OpenAI)     — signed in with a ChatGPT plan.
 
-When one is installed and signed in on this computer, Tillwright hands hard
+When one is installed and signed in on this computer, Promptaro hands hard
 agent tasks to it, so they run on your plan instead of per-use API billing.
 If a plan hits its usage limit, the other plan (or the regular models) takes
 over, and that plan is rested for an hour.
 
-Tillwright never reads, stores or forwards either login: it runs the
+Promptaro never reads, stores or forwards either login: it runs the
 unmodified program in the task's own copy of your project and reads its
 progress output. Sign-in status comes from each tool's own status command.
 """
@@ -65,16 +65,17 @@ NEVER_TOOLS = ["Bash(git push:*)", "Bash(git clean:*)", "Bash(sudo:*)", "Bash(rm
 _ACTION = {"Read": "read_file", "Edit": "edit_file", "MultiEdit": "edit_file", "Write": "write_file",
            "Bash": "run", "Grep": "search", "Glob": "search", "LS": "list_files"}
 
-WORKER_NOTE = ("You are running inside Tillwright on an isolated git branch of the user's project. Stay inside "
+WORKER_NOTE = ("You are running inside Promptaro on an isolated git branch of the user's project. Stay inside "
                "this folder: only read or change files that live here. Make focused changes, run the project's "
                "tests when they exist, and end with a short summary of what changed and how you verified it.")
 
 
 # ------------------------------------------------------------- finding the tools
-def _find(env_var: str, name: str, extra: list) -> str | None:
-    override = os.environ.get(env_var)
-    if override:
-        return override if Path(override).exists() else None
+def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
+    for env_var in (env_vars if isinstance(env_vars, tuple) else (env_vars,)):
+        override = os.environ.get(env_var)
+        if override:
+            return override if Path(override).exists() else None
     for c in (shutil.which(name), *extra):
         if c and Path(c).exists() and os.access(c, os.X_OK):
             return str(c)
@@ -83,13 +84,13 @@ def _find(env_var: str, name: str, extra: list) -> str | None:
 
 def find_claude() -> str | None:
     home = Path.home()
-    return _find("TILLWRIGHT_CLAUDE_BIN", "claude", [home / ".local/bin/claude", home / ".claude/local/claude",
+    return _find(("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"), "claude", [home / ".local/bin/claude", home / ".claude/local/claude",
                                                        "/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
 
 
 def find_codex() -> str | None:
     home = Path.home()
-    return _find("TILLWRIGHT_CODEX_BIN", "codex", [home / ".local/bin/codex", home / ".npm-global/bin/codex",
+    return _find(("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"), "codex", [home / ".local/bin/codex", home / ".npm-global/bin/codex",
                                                      "/opt/homebrew/bin/codex", "/usr/local/bin/codex"])
 
 
@@ -201,7 +202,7 @@ def _text_of(content) -> str:
 
 
 class _CliRun:
-    """Runs one agent turn through an official coding tool and mirrors its progress into Tillwright."""
+    """Runs one agent turn through an official coding tool and mirrors its progress into Promptaro."""
     engine = ""
 
     def __init__(self, desk: "Desk", sid: str):

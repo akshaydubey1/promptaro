@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     await router.aclose()
 
 
-app = FastAPI(title="Akshay Smart Router", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Promptaro Smart Router", version="0.2.0", lifespan=lifespan)
 # Only answer requests addressed to this machine (blocks DNS-rebinding tricks
 # that could let a website spend your credits through the local server).
 _hosts = os.environ.get("ROUTER_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",")

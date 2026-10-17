@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from conftest import Scripted, act
 
-H = {"x-tillwright": "1"}
+H = {"x-promptaro": "1"}
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def wait_status(c, sid, done=("idle", "review"), timeout=10):
 
 
 def test_ui_and_health(client):
-    assert "Tillwright" in client.get("/").text
+    assert "Promptaro" in client.get("/").text
     h = client.get("/healthz").json()
     assert h["ok"] and h["ai_available"]
 
@@ -105,7 +105,7 @@ def test_models_list_for_picker(client):
     assert ids == ["small", "medium", "large"]
 
 
-def test_chat_knows_about_tillwright(client):
+def test_chat_knows_about_promptaro(client):
     client.fake.shared = ["Click New agent task, pick a git repo, describe the task."]
     sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
     client.post(f"/api/sessions/{sid}/messages", json={"text": "why can't I add a new agent?"}, headers=H)

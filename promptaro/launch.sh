@@ -1,36 +1,36 @@
 #!/bin/bash
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-# Tillwright launcher for macOS and Linux — Author: Akshay Dubey
+# Promptaro launcher for macOS and Linux — Author: Akshay Dubey
 #   ./launch.sh               run in this terminal (close it to stop)
-#   ./launch.sh --background  run quietly in the background (used by Tillwright.app and the Linux menu entry)
+#   ./launch.sh --background  run quietly in the background (used by Promptaro.app and the Linux menu entry)
 # First run installs what it needs (about a minute). Opens as its own window
 # (Chrome / Edge / Brave / Chromium app mode) or in your default browser.
 set -e
 cd "$(dirname "$0")"
 HERE="$(pwd)"
-PORT="${TILLWRIGHT_PORT:-8770}"
+PORT="${PROMPTARO_PORT:-${TILLWRIGHT_PORT:-8770}}"
 URL="http://localhost:$PORT"
 BG=0; [ "$1" = "--background" ] && BG=1
-LOG="${TILLWRIGHT_LOG:-$HOME/.tillwright/tillwright.log}"
-mkdir -p "$(dirname "$LOG")" "$HOME/.tillwright"
+LOG="${PROMPTARO_LOG:-${TILLWRIGHT_LOG:-$HOME/.promptaro/promptaro.log}}"
+mkdir -p "$(dirname "$LOG")" "$HOME/.promptaro"
 export SMART_ROUTER_ROOT="${SMART_ROUTER_ROOT:-$(cd ../smart-router 2>/dev/null && pwd)}"
 
 say() {   # progress: Terminal text, or a desktop notification when running in the background
   if [ $BG = 1 ]; then
-    if command -v osascript >/dev/null; then osascript -e "display notification \"$1\" with title \"Tillwright\"" >/dev/null 2>&1 || true
-    elif command -v notify-send >/dev/null; then notify-send Tillwright "$1" || true; fi
+    if command -v osascript >/dev/null; then osascript -e "display notification \"$1\" with title \"Promptaro\"" >/dev/null 2>&1 || true
+    elif command -v notify-send >/dev/null; then notify-send Promptaro "$1" || true; fi
   else echo "$1"; fi
 }
 fail() {
   if [ $BG = 1 ] && command -v osascript >/dev/null; then
-    osascript -e "display alert \"Tillwright couldn't start\" message \"$1\n\nDetails: $LOG\"" >/dev/null 2>&1 || true
-  else echo "Tillwright couldn't start: $1"; [ -t 0 ] && read -n1 -p "Press any key to close"; fi
+    osascript -e "display alert \"Promptaro couldn't start\" message \"$1\n\nDetails: $LOG\"" >/dev/null 2>&1 || true
+  else echo "Promptaro couldn't start: $1"; [ -t 0 ] && read -n1 -p "Press any key to close"; fi
   exit 1
 }
-[ -n "$SMART_ROUTER_ROOT" ] && [ -d "$SMART_ROUTER_ROOT/router" ] || fail "The smart-router folder must sit next to the tillwright folder."
+[ -n "$SMART_ROUTER_ROOT" ] && [ -d "$SMART_ROUTER_ROOT/router" ] || fail "The smart-router folder must sit next to the promptaro folder."
 
 open_app() {
-  [ -n "$TILLWRIGHT_NO_WINDOW" ] && return          # started by a command-line launcher
+  [ -n "${PROMPTARO_NO_WINDOW:-$TILLWRIGHT_NO_WINDOW}" ] && return          # started by a command-line launcher
   if [ "$(uname)" = "Darwin" ]; then
     for app in "Google Chrome" "Microsoft Edge" "Brave Browser" "Chromium"; do
       for dir in /Applications "$HOME/Applications"; do
@@ -49,7 +49,7 @@ open_app() {
 if H=$(curl -fsS "$URL/healthz" 2>/dev/null); then
   if echo "$H" | grep -q '"update_ready":true'; then
     say "Loading the updated version…"
-    curl -fsS -X POST -H "x-tillwright: 1" "$URL/api/restart" >/dev/null 2>&1 || true
+    curl -fsS -X POST -H "x-promptaro: 1" "$URL/api/restart" >/dev/null 2>&1 || true
     for i in $(seq 1 40); do sleep 0.5; curl -fsS "$URL/healthz" 2>/dev/null | grep -q '"update_ready":false' && break; done
   fi
   open_app; exit 0
@@ -62,7 +62,7 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 if [ ! -x .venv/bin/python ] || [ requirements.txt -nt .venv/.installed ]; then
-  say "Setting up Tillwright (one time)…"
+  say "Setting up Promptaro (one time)…"
   { uv venv --quiet --python 3.12 .venv && uv pip install --quiet --python .venv/bin/python -r requirements.txt; } >>"$LOG" 2>&1 \
     || fail "Setup didn't finish."
   touch .venv/.installed
@@ -72,10 +72,10 @@ fi
 OPENER=$!
 if [ $BG = 1 ]; then
   nohup .venv/bin/python -m uvicorn desk.server:app --host 127.0.0.1 --port "$PORT" --log-level warning >>"$LOG" 2>&1 &
-  echo $! > "$HOME/.tillwright/tillwright.pid"
+  echo $! > "$HOME/.promptaro/promptaro.pid"
   wait $OPENER || true                 # return once the window is open
   curl -fsS "$URL/healthz" >/dev/null 2>&1 || fail "It stopped while starting."
   exit 0
 fi
-echo "Tillwright is running at $URL  (close this window to stop it)"
+echo "Promptaro is running at $URL  (close this window to stop it)"
 exec .venv/bin/python -m uvicorn desk.server:app --host 127.0.0.1 --port "$PORT" --log-level warning
