@@ -124,12 +124,15 @@ async def openrouter_callback(nonce: str, request: Request, code: str = ""):
 class SettingsBody(BaseModel):
     free_models: str | None = Field(None, pattern="^(off|chat|all)$")
     gateway_spend: str | None = Field(None, pattern="^(free|paid_ok)$")
+    daily_budget_usd: float | None = Field(None, ge=0, le=10000)
 
 
 @api.post("/connect/settings")
 async def save_settings(body: SettingsBody, request: Request):
-    """free_models: off | chat (default) | all.  gateway_spend: free (default) | paid_ok."""
-    d = catalog.set_settings(free_models=body.free_models, gateway_spend=body.gateway_spend)
+    """free_models: off | chat (default) | all.  gateway_spend: free (default) | paid_ok.
+    daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap."""
+    d = catalog.set_settings(free_models=body.free_models, gateway_spend=body.gateway_spend,
+                             daily_budget_usd=body.daily_budget_usd)
     await asyncio.to_thread(_router(request).reload)
     return d
 
@@ -191,14 +194,14 @@ def _provider_reason(e: Exception) -> str:
     """The provider's own words, without ever echoing the key."""
     resp = getattr(e, "response", None)
     if resp is None:
-        return f"{type(e).__name__}: {str(e)[:160]}" if str(e) else type(e).__name__
+        return f"{type(e).__name__}: {secrets.redact(str(e))[:160]}" if str(e) else type(e).__name__
     try:
         d = resp.json()
         err = d.get("error", d)
         msg = err.get("message") if isinstance(err, dict) else str(err)
     except Exception:
         msg = (resp.text or "")[:200]
-    return f"HTTP {resp.status_code}: {str(msg)[:200]}"
+    return f"HTTP {resp.status_code}: {secrets.redact(msg)[:200]}"
 
 
 @api.post("/connect/key")

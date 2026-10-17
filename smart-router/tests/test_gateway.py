@@ -149,6 +149,25 @@ def test_require_tools(tmp_path):
     assert "paid/notools" not in {c.model.id for c in d.considered}
 
 
+def test_sticky_session_keeps_the_conversation_on_one_model(tmp_path):
+    _free_stack()
+    root = _root(tmp_path, [PAID])
+    secrets.set("PAID_KEY", "k")
+    r = Router(root, db_path=tmp_path / "r.db")
+    msgs = [{"role": "user", "content": "this conversation's first message"}]
+    kw = dict(messages=msgs, est_in=100, est_out=50, tools=False, images=False, requested="tillwright-auto")
+    cands = gateway.plan(r, **kw)
+    assert len(cands) > 1
+    last = cands[-1].id
+    gateway._sticky_pick(gateway._stick_key(msgs, False), last)      # pretend this model served turn 1
+    cands2 = gateway.plan(r, **kw)
+    assert cands2[0].id == last                                      # turn 2 prefers it
+    other = [{"role": "user", "content": "a different conversation"}]
+    cands3 = gateway.plan(r, messages=other, est_in=100, est_out=50, tools=False, images=False,
+                          requested="tillwright-auto")
+    assert cands3[0].id == cands[0].id                               # other conversations unaffected
+
+
 # --------------------------------------------------------- translation
 def test_anthropic_request_translation():
     body = {"system": [{"type": "text", "text": "You are Claude Code."}],

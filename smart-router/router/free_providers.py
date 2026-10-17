@@ -131,6 +131,20 @@ FREE_PROVIDERS: dict[str, FreeProvider] = {p.id: p for p in (
         fallback_models=("command-a-03-2025",),
         note="Trial key: 1000 requests a month, non-commercial use only.",
         source="https://docs.cohere.com/docs/rate-limits"),
+    FreeProvider(
+        id="gemini_free", label="Gemini (free tier)", base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        key_env="GEMINI_API_KEY", get_key_url="https://aistudio.google.com/app/apikey",
+        key_pattern=r"^AIza[A-Za-z0-9_\-]{20,}$",
+        limits={"rpm": 10, "rpd": 250, "tpm": 250_000}, scope="model", trains=True, latency_ms=1500,
+        rules=(
+            ModelRule(r"^gemini-[\d.]+-flash$|^gemini-flash-latest$", 2, "gemini", 200_000, vision=True),
+            ModelRule(r"^gemini-[\d.]+-flash-lite|^gemini-flash-lite", 1, "gemini", 200_000, vision=True,
+                      limits={"rpm": 15, "rpd": 1000}),
+        ),
+        fallback_models=("gemini-2.5-flash", "gemini-2.5-flash-lite"),
+        note="AI Studio's free tier. Free-tier prompts may be used to improve Google products, so "
+             "private code uses this only when 'all' free models are allowed.",
+        source="https://ai.google.dev/gemini-api/docs/rate-limits"),
 )}
 
 # Starting trust per model family (added to the size class's prior). Families with no
@@ -153,8 +167,9 @@ def pick_models(p: FreeProvider, ids: list[str]) -> list[tuple[str, ModelRule]]:
     for rule in p.rules:
         hits = sorted((i for i in ids if re.search(rule.pattern, i, re.I)), reverse=True)   # newest-looking first
         hits = [h for h in hits if not re.search(r"(guard|safety|embed|whisper|tts|orpheus|vision-only)", h, re.I)]
-        if hits and hits[0] not in {m for m, _ in out}:
-            out.append((hits[0], rule))
+        hit = next((h for h in hits if h not in {m for m, _ in out}), None)
+        if hit:
+            out.append((hit, rule))
         if len(out) >= p.max_models:
             break
     return out

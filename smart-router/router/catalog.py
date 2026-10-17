@@ -20,10 +20,10 @@ from pathlib import Path
 
 import httpx
 
-from . import secrets
+from . import migrate, secrets
 from .free_providers import FAMILY_TRUST, FREE_PROVIDERS, limits_for, pick_models
 
-HOME = Path(os.environ.get("ROUTER_HOME", Path.home() / ".akshay-router"))
+HOME = migrate.home()                        # ~/.promptaro, migrating ~/.akshay-router & ~/.tillwright
 OR_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OR_BASE = "https://openrouter.ai/api/v1"
 
@@ -35,7 +35,7 @@ DIRECT = {
                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
 }
 _SKIP = re.compile(r"(audio|image-|realtime|search|tts|embed|guard|moderation|transcribe|-instruct$|vision-preview)", re.I)
-# How much to trust each model family before Tillwright has its own results.
+# How much to trust each model family before Promptaro has its own results.
 # Unknown families start lower, so a cheap unknown model isn't chosen on price
 # alone; good results (checks passed, thumbs up) raise them over time.
 REPUTATION = {
@@ -188,8 +188,10 @@ def free_provider_specs() -> list[dict]:
                 caps.add("long_context")
             trust = FAMILY_TRUST.get(rule.family, -0.08)
             specs.append({
-                "id": f"{pid}/{model}", "name": f"{model.split('/')[-1]} ({p.label})", "provider": "openai_compatible",
-                "model": model, "api_key_env": p.key_env, "base_url": p.base_url, "via": f"{p.label} (free)",
+                "id": f"{pid}/{model}", "name": f"{model.split('/')[-1]} ({p.label})",
+                "provider": "openai_compatible",
+                "model": model, "api_key_env": p.key_env, "base_url": p.base_url,
+                "via": f"{p.label} (free)",
                 "free": True, "trains": p.trains, "quota": pid, "limits": limits_for(p, rule), "vendor": pid,
                 "tier": rule.tier, "context_window": rule.context, "capabilities": sorted(caps),
                 "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": p.latency_ms,
@@ -210,6 +212,7 @@ def get_settings() -> dict:
     # all  : code may also use free providers that may train on prompts
     d.setdefault("free_models", "chat")
     d.setdefault("gateway_spend", "free")      # coding tools: "free" = never spend money, "paid_ok" = may
+    d.setdefault("daily_budget_usd", 0.0)      # hard daily cap on paid spend; 0 = no cap
     return d
 
 

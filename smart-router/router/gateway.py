@@ -49,7 +49,7 @@ _client: httpx.AsyncClient | None = None
 def gateway_token() -> str:
     t = secrets.get(TOKEN_KEY)
     if not t:
-        t = "tw-" + pysecrets.token_urlsafe(32)
+        t = "pro-" + pysecrets.token_urlsafe(32)
         secrets.set(TOKEN_KEY, t)
     return t
 
@@ -342,13 +342,64 @@ def _last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+_sticky: dict[str, tuple[float, str]] = {}       # conversation fingerprint -> (expires, model_id)
+_STICKY_TTL = 3600                                # keep a tool's conversation on one model ~1h
+
+
+def _stick_key(messages: list[dict], tools: bool) -> str:
+    """A tool's conversation is identified by its first user message, so every turn of that
+    conversation prefers the model it started on — better prompt-cache hits and consistency."""
+    first = next((m for m in messages if m.get("role") == "user"), None)
+    text = first.get("content") if first else ""
+    if not isinstance(text, str):
+        text = json.dumps(text)[:2000]
+    return hashlib.sha256((text[:2000] + ("|t" if tools else "")).encode()).hexdigest()[:16]
+
+
+def _sticky_pick(key: str, model_id: str) -> None:
+    now = time.time()
+    for k in [k for k, (exp, _) in _sticky.items() if exp <= now]:
+        _sticky.pop(k, None)
+    if len(_sticky) >= 1000:                                   # bound memory: drop the oldest entries
+        for k in sorted(_sticky, key=lambda k: _sticky[k][0])[:200]:
+            _sticky.pop(k, None)
+    _sticky[key] = (now + _STICKY_TTL, model_id)
+
+
 def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool, images: bool,
          requested: str) -> list:
-    """Models to try, best first."""
+    """Models to try, best first. An exact model name is a hint: spend, privacy,
+    capability and quota rules apply to it the same as to any routed choice."""
     reg = router.registry
+    settings = catalog.get_settings()
+    mode = settings.get("free_models", "chat")
+    free_only = settings.get("gateway_spend", "free") == "free"
+    daily_left = router._daily_budget_left()
+    need = {"tools"} if tools else set()
+    free_ok = catalog.FREE.available()
+    usable_ids = {m.id for m in reg.usable()}
+
+    def usable_for_gateway(m) -> bool:
+        if m.provider == "offline" or m.id not in usable_ids:
+            return False
+        is_free = bool(m.extra.get("free")) or (m.price_in == 0 and m.price_out == 0)
+        if free_only and not is_free:
+            return False                                        # fail closed: never silently spend
+        if not is_free and m.cost(est_in, est_out) > daily_left:
+            return False                                        # daily budget reached
+        if m.extra.get("free") and (
+                mode == "off"                                    # free models disabled entirely
+                or (mode != "all" and m.extra.get("trains"))     # private work: no trainers
+                or (not m.extra.get("quota") and not free_ok)):  # shared :free pool exhausted
+            return False
+        if need - m.capabilities or est_in > m.context_window * 0.9:
+            return False
+        if m.extra.get("quota") and not quota.LEDGER.allow(m, est_in + est_out)[0]:
+            return False
+        return True
+
     exact = reg.models.get(requested)
-    if exact and exact in reg.usable():
-        return [exact]
+    exact = exact if exact and usable_for_gateway(exact) else None
     text = _last_user_text(messages)
     prof = classify(text[:20_000])
     prefer, floor, ceil = _hint(requested)
@@ -361,21 +412,25 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
     prof.est_input_tokens = est_in
     if images:
         prof.needs.add("vision")
-    mode = catalog.get_settings().get("free_models", "chat")
-    need = {"tools"} if tools else set()
     d = route(reg, router.store, prof, prefer=prefer, allow_free=mode != "off", private=mode != "all",
               require=need, est_output=est_out)
-    free_only = catalog.get_settings().get("gateway_spend", "free") == "free"
     seen, out = set(), []
+    if exact:
+        out.append(exact); seen.add(exact.id)               # named model first, normal rungs after it
     rest = sorted((c for c in d.considered), key=lambda c: (not c.clears_bar, -c.score))
     for c in [d.primary, *d.ladder, *rest]:
-        if c.model.id in seen or c.model.provider == "offline":
-            continue
-        if free_only and not (c.model.extra.get("free") or (c.model.price_in == 0 and c.model.price_out == 0)):
+        if c.model.id in seen or not usable_for_gateway(c.model):
             continue
         seen.add(c.model.id)
         out.append(c.model)
-    return out[:MAX_CANDIDATES]
+    out = out[:MAX_CANDIDATES]
+    hit = _sticky.get(_stick_key(messages, tools))
+    if not exact and hit and hit[0] > time.time():          # an explicit model beats stickiness
+        for i, m in enumerate(out):                    # stay on this conversation's model when it still qualifies
+            if m.id == hit[1]:
+                out.insert(0, out.pop(i))
+                break
+    return out
 
 
 async def plan_or_wait(router, **kw) -> list:
@@ -388,12 +443,16 @@ async def plan_or_wait(router, **kw) -> list:
     if c:
         return c
     est = kw["est_in"] + kw["est_out"]
-    mode = catalog.get_settings().get("free_models", "chat")
+    settings = catalog.get_settings()
+    mode = settings.get("free_models", "chat")
+    free_only = settings.get("gateway_spend", "free") == "free"
     need = {"tools"} if kw.get("tools") else set()
     waits = []
     for m in router.registry.usable():
         if not m.extra.get("quota") or (need - m.capabilities) or (mode != "all" and m.extra.get("trains")) \
                 or mode == "off" or kw["est_in"] > m.context_window * 0.9:
+            continue
+        if free_only and not (m.extra.get("free") or (m.price_in == 0 and m.price_out == 0)):
             continue
         w = quota.LEDGER.wait_for(m, est)
         if w is not None:
@@ -416,7 +475,7 @@ def _openai_target(spec) -> tuple[str, dict]:
         headers["authorization"] = f"Bearer {key}"
     if "openrouter.ai" in base:
         headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "Tillwright"
+        headers["X-Title"] = "Promptaro"
     return f"{base}/chat/completions", headers
 
 
@@ -433,16 +492,26 @@ async def _open(method_url: str, headers: dict, body: dict, stream: bool) -> htt
             ra_s = None
         text = resp.text[:400]
         await resp.aclose()
-        raise ProviderError(f"HTTP {resp.status_code}: {text}", status=resp.status_code, retry_after=ra_s)
+        retryable = resp.status_code in (408, 409, 425, 429, 529) or resp.status_code >= 500
+        raise ProviderError(f"HTTP {resp.status_code}: {text}", retryable=retryable,
+                            status=resp.status_code, retry_after=ra_s)
     return resp
 
 
 def _failed(router, spec, err: Exception, tried: list) -> None:
     if not quota.after_error(spec, err):
         router.registry.breaker.record(spec.id, False)
-    status = getattr(err, "status", None)
-    transient = status is None or status in (408, 409, 425, 429, 529) or status >= 500
-    tried.append((f"{spec.extra.get('name', spec.id)}: {str(err)[:160]}", transient))
+    transient = getattr(err, "retryable", None)
+    if transient is None:
+        status = getattr(err, "status", None)
+        transient = status is None or status in (408, 409, 425, 429, 529) or status >= 500
+    tried.append((f"{spec.extra.get('name', spec.id)}: {secrets.redact(str(err))[:160]}", transient))
+
+
+def _gave_up(tried: list) -> bool:
+    """Two providers rejecting the request itself (not rate limits) means retrying
+    more candidates almost certainly won't help — the request is the problem."""
+    return sum(1 for _, tr in tried if not tr) >= 2
 
 
 def _all_failed(tried: list, anthropic: bool = True):
@@ -452,13 +521,19 @@ def _all_failed(tried: list, anthropic: bool = True):
     if any(tr for _, tr in tried):
         msg = "Every model that could take this request is busy or rate-limited just now: " + why
         return _anthropic_error(529, "overloaded_error", msg) if anthropic else _openai_error(503, "all_busy", msg)
-    msg = ("Tillwright: the connected models refused this request (check the keys in Tillwright → Connections): "
+    msg = ("Promptaro: the connected models refused this request (check the keys in Promptaro → Connections): "
            + why)
     return _anthropic_error(400, "invalid_request_error", msg) if anthropic else _openai_error(400, "all_refused", msg)
 
 
-def _account(router, spec, tin: int, tout: int, headers: dict | None = None) -> None:
-    quota.after_call(spec, SimpleNamespace(tokens_in=tin, tokens_out=tout, headers=headers or {}))
+def _account(router, spec, tin: int, tout: int, headers: dict | None = None, res: dict | None = None,
+             stick: str | None = None) -> None:
+    if res is not None:
+        quota.LEDGER.settle(res, spec, tin + tout, headers)
+    else:
+        quota.after_call(spec, SimpleNamespace(tokens_in=tin, tokens_out=tout, headers=headers or {}))
+    if stick:
+        _sticky_pick(stick, spec.id)
     router.registry.breaker.record(spec.id, True)
     router.notify_usage(spec, tin, tout, "gateway")
 
@@ -467,27 +542,45 @@ def _router(request: Request):
     return request.app.state.router
 
 
+def _model_headers(spec) -> dict:
+    """Which model actually answered. Sent under both names: Promptaro-era clients read the
+    new header, tools written for Tillwright keep reading the old one."""
+    return {"x-promptaro-model": spec.id, "x-promptaro-via": spec.extra.get("via", ""),
+            "x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+
+
 # ================================================================ endpoints
 @api.get("/v1/models")
 async def models(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     reg = _router(request).registry
+    settings = catalog.get_settings()
+    free_only = settings.get("gateway_spend", "free") == "free"
+    mode = settings.get("free_models", "chat")
     usable = [m for m in reg.usable() if m.provider != "offline"]
-    ids = [("tillwright-auto", "Tillwright Auto (picks the model)"),
-           ("tillwright-fast", "Tillwright Fast (quick, free when possible)"),
-           ("tillwright-best", "Tillwright Best (strongest available)")] + \
+    if free_only:
+        usable = [m for m in usable if m.extra.get("free") or (m.price_in == 0 and m.price_out == 0)]
+    if mode != "all":
+        usable = [m for m in usable if not (m.extra.get("free") and m.extra.get("trains"))]
+    ids = [("promptaro-auto", "Promptaro Auto (picks the model)"),
+           ("promptaro-fast", "Promptaro Fast (quick, free when possible)"),
+           ("promptaro-best", "Promptaro Best (strongest available)"),
+           # Legacy Tillwright aliases: tools configured before the rename keep working.
+           ("tillwright-auto", "Tillwright Auto → Promptaro Auto"),
+           ("tillwright-fast", "Tillwright Fast → Promptaro Fast"),
+           ("tillwright-best", "Tillwright Best → Promptaro Best")] + \
         [(m.id, m.extra.get("name", m.id)) for m in usable]
     if request.headers.get("anthropic-version"):
         data = [{"type": "model", "id": i, "display_name": n, "created_at": "2026-01-01T00:00:00Z"} for i, n in ids]
         return {"data": data, "has_more": False, "first_id": data[0]["id"], "last_id": data[-1]["id"]}
-    return {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "tillwright"} for i, _ in ids]}
+    return {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "promptaro"} for i, _ in ids]}
 
 
 @api.post("/v1/messages/count_tokens")
 async def count_tokens(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     body = await request.json()
     return {"input_tokens": estimate_tokens({k: body.get(k) for k in ("system", "messages", "tools")})}
 
@@ -495,12 +588,12 @@ async def count_tokens(request: Request):
 @api.post("/v1/messages")
 async def messages(request: Request):
     if not _authorized(request):
-        return _anthropic_error(401, "authentication_error", "Missing or wrong Tillwright gateway token. "
-                                "Start your tool with Tillwright's launcher, or copy the token from "
-                                "Tillwright → Coding tools.")
+        return _anthropic_error(401, "authentication_error", "Missing or wrong Promptaro gateway token. "
+                                "Start your tool with Promptaro's launcher, or copy the token from "
+                                "Promptaro → Coding tools.")
     router = _router(request)
     body = await request.json()
-    requested = str(body.get("model") or "tillwright-auto")
+    requested = str(body.get("model") or "promptaro-auto")
     est_in = estimate_tokens({k: body.get(k) for k in ("system", "messages", "tools")})
     want_out = int(body.get("max_tokens") or 4096)
     has_images = any(isinstance(b, dict) and b.get("type") == "image" for m in body.get("messages") or []
@@ -508,16 +601,23 @@ async def messages(request: Request):
     cands = await plan_or_wait(router, messages=body.get("messages") or [], est_in=est_in,
                                est_out=min(want_out, 1024), tools=bool(body.get("tools")), images=has_images,
                                requested=requested)
-    why = ""
     if not cands:
         # Not a momentary overload, so don't invite the client to retry: say what to do.
-        return _anthropic_error(400, "invalid_request_error", "Tillwright: no connected model can take this request "
-                                f"right now{' (' + why + ')' if why else ''}. The free models' limits may be used up "
-                                "or the request may be too large for them. Add a free provider in Tillwright → "
-                                "Connections, allow paid models in Coding tools, or try again later.")
+        return _anthropic_error(400, "invalid_request_error", "Promptaro: no connected model can take this request "
+                                "right now. The free models' limits may be used up or the request may be too large "
+                                "for them. Add a free provider in Promptaro → Connections, allow paid models in "
+                                "Coding tools, or try again later.")
     stream = bool(body.get("stream"))
-    tried: list = []
+    stick = _stick_key(body.get("messages") or [], bool(body.get("tools")))
+    tried: list = []      # actual provider refusals
+    skipped: list = []    # models whose free allowance ran out between planning and sending
     for spec in cands:
+        res = None
+        if spec.extra.get("quota"):
+            ok, why, res = quota.LEDGER.begin(spec, est_in + min(want_out, 1024))
+            if not ok:
+                skipped.append(f"{spec.extra.get('name', spec.id)}: {why}")
+                continue
         try:
             if spec.provider == "anthropic":
                 out = dict(body, model=spec.model)
@@ -527,7 +627,20 @@ async def messages(request: Request):
                 if request.headers.get("anthropic-beta"):
                     hdrs["anthropic-beta"] = request.headers["anthropic-beta"]
                 resp = await _open(url, hdrs, out, stream)
-                return _anthropic_passthrough(router, spec, resp, stream, est_in)
+                if stream:
+                    return _anthropic_passthrough(router, spec, resp, est_in, res, stick)
+                try:
+                    d = resp.json()
+                except ValueError:
+                    quota.LEDGER.abandon(res)
+                    _failed(router, spec, ProviderError("anthropic returned a non-JSON response",
+                                                      retryable=False), tried)
+                    continue
+                u = d.get("usage") or {}
+                _account(router, spec, u.get("input_tokens", est_in), u.get("output_tokens", 0),
+                         rate_headers(resp), res, stick)
+                headers = _model_headers(spec)
+                return JSONResponse(d, headers=headers)
             url, hdrs = _openai_target(spec)
             ob = anthropic_to_openai(body, short_ids=spec.extra.get("quota") in ("mistral", "codestral"))
             ob["model"] = spec.model
@@ -538,22 +651,29 @@ async def messages(request: Request):
                 ob["stream_options"] = {"include_usage": True}
             resp = await _open(url, hdrs, ob, stream)
         except (ProviderError, httpx.HTTPError) as e:
+            quota.LEDGER.abandon(res)
             _failed(router, spec, e, tried)
+            if _gave_up(tried):
+                break
             continue
-        headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", ""),
-                   "x-tillwright-est-tokens": str(est_in)}
+        headers = {**_model_headers(spec), "x-promptaro-est-tokens": str(est_in)}
         if not stream:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                quota.LEDGER.abandon(res)
+                _failed(router, spec, ProviderError("model returned a non-JSON response", retryable=False), tried)
+                continue
             msg = openai_to_anthropic(data, requested)
             _account(router, spec, msg["usage"]["input_tokens"] or est_in, msg["usage"]["output_tokens"],
-                     rate_headers(resp))
+                     rate_headers(resp), res, stick)
             return JSONResponse(msg, headers=headers)
-        return StreamingResponse(_translate_stream(router, spec, resp, requested, est_in),
+        return StreamingResponse(_translate_stream(router, spec, resp, requested, est_in, res, stick),
                                  media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
-    return _all_failed(tried)
+    return _all_failed(tried or [(s, True) for s in skipped])
 
 
-async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_in: int):
+async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_in: int, res=None, stick=None):
     tr = StreamTranslator(model, est_in)
     hdrs = rate_headers(resp)
     try:
@@ -580,16 +700,11 @@ async def _translate_stream(router, spec, resp: httpx.Response, model: str, est_
                                                                  f"{str(e)[:200]}. Send the message again."}})
     finally:
         await resp.aclose()
-        _account(router, spec, tr.input_tokens, tr.output_tokens, hdrs)
+        _account(router, spec, tr.input_tokens, tr.output_tokens, hdrs, res, stick)
 
 
-def _anthropic_passthrough(router, spec, resp: httpx.Response, stream: bool, est_in: int):
-    headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
-    if not stream:
-        d = resp.json()
-        u = d.get("usage") or {}
-        _account(router, spec, u.get("input_tokens", est_in), u.get("output_tokens", 0))
-        return JSONResponse(d, headers=headers)
+def _anthropic_passthrough(router, spec, resp: httpx.Response, est_in: int, res=None, stick=None):
+    headers = _model_headers(spec)
 
     async def pipe():
         tin, tout = est_in, 0
@@ -606,17 +721,17 @@ def _anthropic_passthrough(router, spec, resp: httpx.Response, stream: bool, est
                 yield line + "\n"
         finally:
             await resp.aclose()
-            _account(router, spec, tin, tout)
+            _account(router, spec, tin, tout, None, res, stick)
     return StreamingResponse(pipe(), media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
 
 
 @api.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     if not _authorized(request):
-        return _openai_error(401, "authentication_error", "Missing or wrong Tillwright gateway token.")
+        return _openai_error(401, "authentication_error", "Missing or wrong Promptaro gateway token.")
     router = _router(request)
     body = await request.json()
-    requested = str(body.get("model") or "tillwright-auto")
+    requested = str(body.get("model") or "promptaro-auto")
     msgs = body.get("messages") or []
     est_in = estimate_tokens({"m": msgs, "t": body.get("tools")})
     want_out = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
@@ -627,10 +742,18 @@ async def chat_completions(request: Request):
              if c.provider in ("openai", "openai_compatible")]
     if not cands:
         return _openai_error(503, "no_model", "No connected model can take this request right now. Add a free "
-                             "provider or a key in Tillwright → Connections.")
+                             "provider or a key in Promptaro → Connections.")
     stream = bool(body.get("stream"))
+    stick = _stick_key(msgs, bool(body.get("tools")))
     tried: list = []
+    skipped: list = []
     for spec in cands:
+        res = None
+        if spec.extra.get("quota"):
+            ok, why, res = quota.LEDGER.begin(spec, est_in + min(want_out, 1024))
+            if not ok:
+                skipped.append(f"{spec.extra.get('name', spec.id)}: {why}")
+                continue
         url, hdrs = _openai_target(spec)
         ob = {k: v for k, v in body.items() if k not in ("max_tokens", "max_completion_tokens")}
         ob["model"] = spec.model
@@ -641,17 +764,26 @@ async def chat_completions(request: Request):
         try:
             resp = await _open(url, hdrs, ob, stream)
         except (ProviderError, httpx.HTTPError) as e:
+            quota.LEDGER.abandon(res)
             _failed(router, spec, e, tried)
+            if _gave_up(tried):
+                break
             continue
-        headers = {"x-tillwright-model": spec.id, "x-tillwright-via": spec.extra.get("via", "")}
+        headers = _model_headers(spec)
         if not stream:
-            d = resp.json()
+            try:
+                d = resp.json()
+            except ValueError:
+                quota.LEDGER.abandon(res)
+                _failed(router, spec, ProviderError("model returned a non-JSON response", retryable=False), tried)
+                continue
             u = d.get("usage") or {}
-            _account(router, spec, u.get("prompt_tokens", est_in), u.get("completion_tokens", 0), rate_headers(resp))
+            _account(router, spec, u.get("prompt_tokens", est_in), u.get("completion_tokens", 0),
+                     rate_headers(resp), res, stick)
             d["model"] = requested
             return JSONResponse(d, headers=headers)
 
-        async def pipe(spec=spec, resp=resp):
+        async def pipe(spec=spec, resp=resp, res=res):
             tin, tout = est_in, 0
             hdr = rate_headers(resp)
             try:
@@ -665,18 +797,6 @@ async def chat_completions(request: Request):
                     yield line + "\n"
             finally:
                 await resp.aclose()
-                _account(router, spec, tin, tout, hdr)
+                _account(router, spec, tin, tout, hdr, res, stick)
         return StreamingResponse(pipe(), media_type="text/event-stream", headers={**headers, "cache-control": "no-cache"})
-    return _all_failed(tried, anthropic=False)
-
-
-def client_setup(base_url: str) -> dict:
-    """How to point each coding tool at the gateway."""
-    t = gateway_token()
-    return {
-        "base_url": base_url, "token": t,
-        "claude_code": {"env": {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": t,
-                                "ANTHROPIC_API_KEY": ""}},
-        "openai_compatible": {"base_url": f"{base_url}/v1", "api_key": t, "model": "tillwright-auto"},
-        "checked": time.strftime("%Y-%m-%d"),
-    }
+    return _all_failed(tried or [(s, True) for s in skipped], anthropic=False)

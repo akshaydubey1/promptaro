@@ -1,0 +1,59 @@
+{
+  "$schema": "https://akshay-software-hub/schemas/manifest.v1.json",
+  "id": "promptaro",
+  "name": "Promptaro",
+  "description": "Chat with every AI model and run coding agents on your repos. The Smart Router picks the right model for each step: free models for easy questions, the cheapest capable model for everyday work, and your Claude or ChatGPT subscription for hard tasks. Every answer explains its choice. Install the app with promptaro/Install Promptaro.command (Mac), Install Promptaro.bat (Windows) or packaging/install-linux.sh, or ./launch.sh.",
+  "icon": "bot",
+  "color": "#3B6FD8",
+  "category": "AI Agents",
+  "version": "1.0.0",
+  "owner": "Akshay Dubey",
+  "environment": "development",
+  "launchType": "new_tab",
+  "url": "http://localhost:8770/",
+  "apiEndpoint": null,
+  "healthCheckUrl": "http://localhost:8770/healthz",
+  "allowedOrigins": [
+    "http://localhost:8770"
+  ],
+  "authMethod": "none",
+  "credentialRef": null,
+  "permissions": [],
+  "aiRequired": false,
+  "aiOptional": true,
+  "supportedProviders": [
+    "openrouter",
+    "claude",
+    "openai",
+    "gemini",
+    "ollama"
+  ],
+  "defaultAiMode": "ai_assisted",
+  "capabilities": [
+    {
+      "key": "agent.run",
+      "aiMode": "required",
+      "label": "Autonomous coding agent"
+    },
+    {
+      "key": "chat",
+      "aiMode": "required",
+      "label": "Chat with any model"
+    }
+  ],
+  "timeouts": {
+    "connectMs": 3000,
+    "readMs": 30000
+  },
+  "retry": {
+    "maxAttempts": 2,
+    "backoffMs": 500,
+    "jitter": true
+  },
+  "execSpec": null,
+  "healthCheck": {
+    "intervalSeconds": 60,
+    "failureThreshold": 3,
+    "timeoutMs": 3000
+  }
+}

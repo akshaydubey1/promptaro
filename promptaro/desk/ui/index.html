@@ -1,0 +1,150 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Promptaro</title>
+<!-- Promptaro — Author: Akshay Dubey -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect x=%2213%22 y=%222%22 width=%226%22 height=%2228%22 rx=%223%22 fill=%22%233B6FD8%22/%3E%3Ccircle cx=%2216%22 cy=%2210%22 r=%225%22 fill=%22white%22 stroke=%22%232F8F83%22 stroke-width=%223%22/%3E%3Ccircle cx=%2216%22 cy=%2222%22 r=%225%22 fill=%22white%22 stroke=%22%238A4FD3%22 stroke-width=%223%22/%3E%3C/svg%3E">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side" id="side">
+    <div class="brand">Promptaro</div>
+    <div class="side-actions">
+      <button class="btn primary" id="newAgent" title="Give an agent a task in one of your projects">New agent task</button>
+      <button class="btn" id="newChat">New chat</button>
+    </div>
+    <nav class="lists">
+      <div class="group" id="agentsGroup"><h3>Agents</h3><ul id="agentList"></ul></div>
+      <div class="group"><h3>Chats</h3><ul id="chatList"></ul></div>
+    </nav>
+    <button class="btn ghost side-link" id="toolsBtn" title="Use Claude Code, Aider, Cline and more on free models"><span class="glyph">›_</span>Coding tools</button>
+    <button class="btn ghost savings-btn hidden" id="savingsBtn" title="What smart routing has saved you"><span>Saved</span><b id="savingsAmt">$0</b></button>
+    <button class="btn ghost conn-btn" id="openConnections"><span class="dot" id="connDot"></span><span id="connLabel">Connections</span></button>
+  </aside>
+
+  <main class="main">
+    <header class="top" id="top">
+      <button class="btn ghost icon only-mobile" id="menu" aria-label="Show conversations">☰</button>
+      <h1 id="title">Promptaro</h1>
+      <div class="top-tools" id="topTools"></div>
+    </header>
+
+    <div class="update-bar hidden" id="updateBar" role="status">
+      <span>Promptaro has been updated. Restart to use the new version.</span>
+      <button class="btn primary" id="restartBtn">Restart now</button>
+    </div>
+    <section class="thread" id="thread" aria-live="polite"></section>
+
+    <footer class="composer" id="composer">
+      <div class="composer-box">
+        <textarea id="input" rows="1" placeholder="Ask anything"></textarea>
+        <div class="composer-row">
+          <label class="pick"><span>Model</span><select id="modelPick"></select></label>
+          <label class="pick"><span>Priority</span>
+            <select id="preferPick">
+              <option value="balanced">Balanced</option><option value="cheap">Lowest cost</option>
+              <option value="fast">Fastest</option><option value="best">Best quality</option>
+            </select></label>
+          <span class="grow"></span>
+          <button class="btn danger hidden" id="stopBtn">Stop</button>
+          <button class="btn primary" id="sendBtn">Send</button>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <aside class="review hidden" id="review">
+    <header class="review-head">
+      <h2>Changes</h2>
+      <button class="btn ghost icon" id="closeReview" aria-label="Close changes">✕</button>
+    </header>
+    <div class="review-meta" id="reviewMeta"></div>
+    <div class="review-actions" id="reviewActions"></div>
+    <div class="files" id="files"></div>
+    <div class="patch" id="patch"></div>
+    <div class="manual">
+      <label for="manualCmd">Run a command in this copy</label>
+      <div class="manual-row"><input id="manualCmd" placeholder="e.g. npm test"><button class="btn" id="manualRun">Run</button></div>
+    </div>
+  </aside>
+</div>
+
+<!-- New agent task -->
+<dialog id="agentDlg">
+  <form method="dialog" class="dlg" id="agentForm" novalidate>
+    <h2>New agent task</h2>
+    <label>Project folder</label>
+    <div class="row">
+      <input id="projPath" placeholder="/Users/you/code/my-repo" autocomplete="off">
+      <button type="button" class="btn" id="pickFolder">Choose…</button>
+    </div>
+    <div class="recent" id="recentProjects"></div>
+    <label for="taskText">What should the agent do?</label>
+    <textarea id="taskText" rows="5" placeholder="Add retry with backoff to the GCS uploader and cover it with tests"></textarea>
+    <details>
+      <summary>Options</summary>
+      <div class="opts">
+        <label>Model<select id="agentModel"></select></label>
+        <label>Priority<select id="agentPrefer">
+          <option value="balanced">Balanced</option><option value="cheap">Lowest cost</option>
+          <option value="fast">Fastest</option><option value="best">Best quality</option></select></label>
+        <label>Commands<select id="agentApproval">
+          <option value="ask_risky">Ask before risky commands</option>
+          <option value="always_ask">Ask before every command</option>
+          <option value="never_ask">Never ask</option></select></label>
+        <label>Budget for this task (USD)<input id="agentBudget" type="number" min="0.1" max="100" step="any" value="2"></label>
+      </div>
+    </details>
+    <p class="form-error" id="agentErr"></p>
+    <div class="row end">
+      <button type="button" class="btn" value="cancel" id="agentCancel">Cancel</button>
+      <button type="submit" class="btn primary" id="agentStart">Start agent</button>
+    </div>
+    <p class="fine">The agent works on a separate copy of your project (a git worktree on its own branch). Nothing touches your files until you merge.</p>
+  </form>
+</dialog>
+
+<!-- Connections -->
+<dialog id="connDlg">
+  <div class="dlg wide">
+    <h2>Connections</h2>
+    <p class="fine" id="connStorage"></p>
+    <label for="anyKey">Paste any API key (OpenRouter, Anthropic, OpenAI or Google). Promptaro works out which one it is.</label>
+    <div class="row"><input id="anyKey" type="password" autocomplete="off" placeholder="sk-or-…, sk-ant-…, sk-…, AIza…"><button class="btn primary" id="anyKeyBtn">Connect</button></div>
+    <div class="conn-msg hidden" id="connMsg" role="status"></div>
+    <div id="connBody"></div>
+    <div class="row end"><button class="btn ghost" id="quitBtn" title="Stop Promptaro running in the background">Quit Promptaro</button><span class="grow"></span><button class="btn" id="connClose">Done</button></div>
+  </div>
+</dialog>
+
+<!-- Coding tools -->
+<dialog id="toolsDlg">
+  <div class="dlg wide">
+    <h2>Coding tools</h2>
+    <p class="fine">Run Claude Code, Aider, Cline, Continue or OpenCode on the models connected here. Your tool talks to
+      Promptaro on this computer, and Promptaro picks a model for each request: quick housekeeping goes to the fastest
+      free model, real coding to the strongest free model that fits, and a model that hits its limit is swapped out at once.</p>
+    <div id="toolsBody"></div>
+    <div class="row end"><button class="btn" id="toolsClose">Done</button></div>
+  </div>
+</dialog>
+
+<!-- Savings -->
+<dialog id="savingsDlg">
+  <div class="dlg">
+    <h2>Savings</h2>
+    <div id="savingsBody"></div>
+    <div class="row end"><button class="btn" id="savingsClose">Done</button></div>
+  </div>
+</dialog>
+
+<div class="toast hidden" id="toast" role="status"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
