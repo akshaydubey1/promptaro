@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     global router
     router = Router(ROOT, db_path=os.environ.get("ROUTER_DB"), refresh_catalog=False)
     app.state.router = router
-    asyncio.create_task(router.refresh_catalog())
+    app.state.catalog_refresh = asyncio.create_task(router.refresh_catalog())
     yield
     await router.aclose()
 

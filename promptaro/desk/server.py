@@ -54,7 +54,8 @@ async def lifespan(app: FastAPI):
                     db_path=os.environ.get("ROUTER_DB") or DATA / "router.db",
                     refresh_catalog=False)      # cache-only: open the window now, refresh below
     app.state.router = router
-    asyncio.create_task(router.refresh_catalog())
+    # Keep a reference — an unreferenced task can be dropped by the GC mid-refresh.
+    app.state.catalog_refresh = asyncio.create_task(router.refresh_catalog())
     desk = Desk(router, Store(os.environ.get("PROMPTARO_DB") or os.environ.get("TILLWRIGHT_DB")
                               or DATA / "desk.db"))
     if "PROMPTARO_DB" not in os.environ and "TILLWRIGHT_DB" not in os.environ:
