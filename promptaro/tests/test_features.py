@@ -115,8 +115,10 @@ def test_chat_pick_uses_the_plan(client, claude, repo):
     assert a["subscription"] and a["model"] == "claude-code:opus" and a["cost"] == 0.0
     argv = json.loads(claude.read_text())["argv"]
     assert argv[argv.index("--model") + 1] == "opus"
-    allowed = argv[argv.index("--allowedTools") + 1:]
-    assert "Read" in allowed and "Write" not in allowed and "Bash" not in allowed
+    allowed = argv[argv.index("--allowedTools") + 1:argv.index("--disallowedTools")]
+    assert allowed == ["Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
+    denied = argv[argv.index("--disallowedTools") + 1:]
+    assert "Read(**/.env*)" in denied and f"Read({Path.home()}/.ssh/**)" in denied
 
 
 def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
@@ -491,3 +493,69 @@ def test_text_pdf_handles_unicode(tmp_path):
         from pypdf import PdfReader
         got = "\n".join(pg.extract_text() or "" for pg in PdfReader(str(out)).pages)
         assert "नमस्ते" in got
+
+
+# ---------------------------------------------- subscription file protection (review 2)
+def test_dotenv_endings_and_unquoted_secrets(tmp_path):
+    """`config/prod.env` ends in .env; dotenv values are usually unquoted."""
+    from desk.tools import ToolError, Workspace
+    proj = tmp_path / "proj"
+    (proj / "config").mkdir(parents=True)
+    (proj / "config" / "prod.env").write_text("DB_PASSWORD=supersecret123\n")
+    (proj / "app.py").write_text("DB_PASSWORD=supersecret123\nprint('x')\n")
+    ws = Workspace(proj)
+    with pytest.raises(ToolError, match="credentials"):
+        asyncio.run(ws.read_file("config/prod.env"))
+    assert "prod.env" not in asyncio.run(ws.list_files()).output
+    assert "supersecret123" not in asyncio.run(ws.read_file("app.py")).output
+    assert "supersecret123" not in asyncio.run(ws.search("supersecret")).output
+
+
+def test_project_chat_refuses_system_folders(client):
+    for bad in ("/etc", "/usr", "/System"):
+        if Path(bad).is_dir():
+            assert client.post("/api/sessions", json={"project": bad}, headers=H).status_code == 400, bad
+
+
+def test_unbound_subscription_chat_cant_read_files(desk_factory):
+    """With no project bound, Claude sees the whole home dir denied and Codex gets no shell."""
+    desk = desk_factory(Scripted())
+    a = workers.ClaudeChatRun(desk, "x").args("claude", "hi", {}, {})
+    denied = a[a.index("--disallowedTools") + 1:]
+    assert f"Read({Path.home()}/**)" in denied and "--allowedTools" not in a
+    c = workers.CodexChatRun(desk, "x").args("codex", "hi", {}, {})
+    assert "features.shell_tool=false" in c and "features.unified_exec=false" in c
+    # bound to a project: reads stay on (sandboxed), writes still off
+    c2 = workers.CodexChatRun(desk, "x").args("codex", "hi", {"project": "/tmp/proj"}, {})
+    assert 'sandbox_mode="read-only"' in c2 and not any("shell_tool" in x for x in c2)
+
+
+def test_chat_deny_rules_cover_credentials(desk_factory):
+    for pat in ("Read(**/.env*)", "Read(**/*.env)", "Read(**/id_rsa*)", "Read(**/*.pem)",
+                f"Read({Path.home()}/.ssh/**)", f"Read({Path.home()}/.aws/**)"):
+        assert pat in workers.CHAT_DENY, pat
+    a = workers.ClaudeChatRun(desk_factory(Scripted()), "x").args("claude", "hi", {"project": "/tmp/p"}, {})
+    denied = a[a.index("--disallowedTools") + 1:]
+    assert "Write" in denied and "Edit" in denied and "Bash" in denied
+
+
+# ----------------------------------------------------------------- legal gate
+def test_terms_gate_blocks_until_accepted(client):
+    from desk import legal
+    catalog.set_settings(terms_version="")
+    assert client.post("/api/sessions", json={}, headers=H).status_code == 409
+    assert client.get("/api/sessions").status_code == 409
+    st = client.get("/api/legal").json()
+    assert st["accepted"] is False and "liability" in st["terms"].lower()
+    assert client.post("/api/legal/accept", json={"version": "0.0"}, headers=H).status_code == 409
+    assert client.post("/api/legal/accept", json={"version": legal.TERMS_VERSION},
+                       headers=H).status_code == 200
+    assert client.post("/api/sessions", json={}, headers=H).status_code == 200
+
+
+def test_remote_endpoint_shows_untracked_cost(client, monkeypatch):
+    monkeypatch.setattr(catalog, "discover_endpoint_models", lambda *a, **k: ["m1"])
+    client.post("/connect/endpoints", headers=H,
+                json={"label": "CorpEP", "base_url": "https://llm.corp.example/v1"})
+    m = [m for m in client.get("/api/models").json() if m.get("via") == "CorpEP"][0]
+    assert m["cost_note"] == "costs not tracked"

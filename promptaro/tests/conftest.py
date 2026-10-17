@@ -94,6 +94,8 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}")
     for k in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(k, raising=False)
+    from desk import legal
+    legal.accept()                    # tests run as a user who already accepted the terms
     return home
 
 

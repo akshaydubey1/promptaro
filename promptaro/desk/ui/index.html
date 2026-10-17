@@ -26,6 +26,7 @@
     <button class="btn ghost savings-btn hidden" id="savingsBtn" title="What smart routing has saved you"><span>Saved</span><b id="savingsAmt">$0</b></button>
     <button class="btn ghost side-link" id="detailsBtn" title="Show or hide which model answered, tokens and cost under each answer"><span class="dot" id="detailsDot"></span>Model info</button>
     <button class="btn ghost conn-btn" id="openConnections"><span class="dot" id="connDot"></span><span id="connLabel">Connections</span></button>
+    <button class="btn ghost side-link" id="termsBtn" title="Read the Terms of Use"><span class="glyph">§</span>Terms</button>
   </aside>
 
   <main class="main">
@@ -196,6 +197,18 @@
     <h2>Savings</h2>
     <div id="savingsBody"></div>
     <div class="row end"><button class="btn" id="savingsClose">Done</button></div>
+  </div>
+</dialog>
+
+<dialog id="legalDlg" oncancel="event.preventDefault()">
+  <div class="dlg legal">
+    <h2>Terms of Use</h2>
+    <p class="sub">Promptaro is by Akshay Dubey. Read and accept before using the app.</p>
+    <pre class="terms" id="legalTerms"></pre>
+    <div class="row end">
+      <button class="btn hidden" id="legalClose">Close</button>
+      <button class="btn primary" id="legalAccept">I agree</button>
+    </div>
   </div>
 </dialog>
 

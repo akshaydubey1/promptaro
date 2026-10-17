@@ -86,6 +86,20 @@ def _private_file(p: Path) -> None:
 
 
 @app.middleware("http")
+async def require_terms(request: Request, call_next):
+    """Nothing is served until the Terms of Use are accepted on this computer —
+    only the app shell, the terms endpoints and the health check stay open."""
+    from . import legal
+    p = request.url.path
+    open_path = p == "/" or p.startswith("/static") or p.startswith("/api/legal") \
+        or p in ("/healthz", "/favicon.ico")
+    if not open_path and not legal.accepted():
+        return JSONResponse({"detail": "terms_required", "version": legal.TERMS_VERSION},
+                            status_code=409)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def require_app_header(request: Request, call_next):
     """Blocks cross-site requests: a web page can't add this header without a
     CORS preflight, which this server never approves. Both the current
@@ -119,6 +133,26 @@ def _git_error(e: gitops.GitError):
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse(HERE / "ui" / "index.html", headers={"cache-control": "no-store"})
+
+
+@app.get("/api/legal")
+async def legal_status():
+    """Current terms + whether this computer's user has accepted them."""
+    from . import legal
+    return {"version": legal.TERMS_VERSION, "accepted": legal.accepted(), "terms": legal.TERMS_TEXT}
+
+
+class LegalBody(BaseModel):
+    version: str = Field(..., max_length=20)
+
+
+@app.post("/api/legal/accept")
+async def legal_accept(b: LegalBody):
+    from . import legal
+    if b.version != legal.TERMS_VERSION:
+        raise HTTPException(409, "The terms changed — read and accept the current version.")
+    legal.accept()
+    return {"accepted": True}
 
 
 @app.get("/healthz")
@@ -180,6 +214,17 @@ async def new_chat(b: NewChat):
         if root == home or root in home.parents:
             raise HTTPException(400, "Pick a project folder, not your home folder or a whole "
                                      "drive — a project chat can read everything inside it.")
+        # OS and program directories are off limits too (they aren't "your project" —
+        # /etc, /System, C:\Windows all hold machine secrets the model could read).
+        # macOS resolves /etc -> /private/etc, so look past a leading "private".
+        _SYSTEM_TOP = {"etc", "usr", "bin", "sbin", "boot", "dev", "proc", "sys", "run", "snap",
+                       "opt", "system", "library", "windows", "program files",
+                       "program files (x86)", "programdata", "recovery", "$recycle.bin"}
+        parts = [x.lower() for x in root.parts if x not in (root.anchor, "/")]
+        top = parts[1] if parts and parts[0] == "private" and len(parts) > 1 else (parts[0] if parts else "")
+        if top in _SYSTEM_TOP:
+            raise HTTPException(400, "That's a system folder, not a project — pick a folder "
+                                     "with your own files in it.")
         fields["project"] = str(root)
     return desk.store.create("chat", b.title, **fields)
 
@@ -531,6 +576,7 @@ async def models():
             extra.append({"id": f"{mid}:{vid}", "name": f"{vlabel} (subscription)", **entry})
     return extra + [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""), "tier": m.tier,
              "free": bool(m.extra.get("free")), "vendor": m.extra.get("vendor", ""),
+             "cost_note": m.extra.get("cost_note", ""),
              "price_in": round(m.price_in, 3), "price_out": round(m.price_out, 3)}
             for m in sorted(reg.models.values(), key=lambda m: (m.tier, m.price_in))
             if m.id in usable and m.provider != "offline"]

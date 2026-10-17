@@ -131,7 +131,7 @@ $("menu").onclick = () => $("side").classList.toggle("open");
 async function loadModels() {
   try { S.models = await api("/api/models"); } catch { S.models = []; }
   S.tiers = Object.fromEntries(S.models.map((m) => [m.id, m.tier]));
-  const opts = `<option value="">Auto (router decides)</option>` + S.models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.subscription ? "" : m.free ? " · free" : m.via ? " · " + esc(m.via) : ""}</option>`).join("");
+  const opts = `<option value="">Auto (router decides)</option>` + S.models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.subscription ? "" : m.free ? " · free" : m.cost_note ? " · " + esc(m.cost_note) : m.via ? " · " + esc(m.via) : ""}</option>`).join("");
   $("modelPick").innerHTML = opts; $("agentModel").innerHTML = opts;
   const on = S.models.length > 0;
   $("connDot").classList.toggle("on", on);
@@ -303,7 +303,7 @@ function renderEvent(ev) {
           <span class="model">${esc(d.name || d.model)}</span>
           ${d.offline ? "" : d.free ? '<span class="tag free">Free</span>' : '<span class="tag paid">Paid</span>'}
           <span>${d.cached ? "reused an earlier answer" : `${fmtTokens(tokens)} tokens`}${tokens && !d.cached ? ` <span class="sub">(${fmtTokens(d.tokens_in || 0)} in · ${fmtTokens(d.tokens_out || 0)} out)</span>` : ""}</span>
-          ${!d.free && +d.cost > 0 ? `<span>${money(+d.cost)}</span>` : ""}
+          ${!d.free && +d.cost > 0 ? `<span>${money(+d.cost)}</span>` : d.cost_note ? `<span class="sub">${esc(d.cost_note)}</span>` : ""}
           ${d.retry ? '<span class="auto">Stronger model</span>' : S.session && S.session.model ? "" : '<span class="auto">Auto-selected</span>'}
           ${d.passed === false && !d.offline ? '<span class="flag-bad">did not pass checks</span>' : ""}
         </div>
@@ -962,5 +962,26 @@ $("studioDlg").addEventListener("click", async (e) => {
   if (q.get("error")) toast(q.get("error"), 6000);
   if (q.toString()) history.replaceState(null, "", "/");
   applyDetailsPref();
+  // Terms of Use gate — the app stays inert until accepted (server enforces too).
+  async function showTerms(review) {
+    const lg = await api("/api/legal");
+    $("legalTerms").textContent = lg.terms;
+    $("legalAccept").classList.toggle("hidden", review);
+    $("legalClose").classList.toggle("hidden", !review);
+    $("legalDlg").showModal();
+    if (review) return;
+    await new Promise((resolve) => {
+      $("legalAccept").onclick = async () => {
+        $("legalAccept").disabled = true;
+        try {
+          await api("/api/legal/accept", { method: "POST", body: { version: lg.version } });
+          $("legalDlg").close(); resolve();
+        } catch (x) { $("legalAccept").disabled = false; toast(x.message); }
+      };
+    });
+  }
+  $("termsBtn").onclick = () => showTerms(true);
+  $("legalClose").onclick = () => $("legalDlg").close();
+  if (!(await api("/api/legal")).accepted) await showTerms(false);
   await loadModels(); await loadSessions(); welcome(); connectStream(); checkUpdate(); loadSavings();
 })();

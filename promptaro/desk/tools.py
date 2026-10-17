@@ -179,15 +179,16 @@ _SECRET_TEXT = re.compile(
     r"gsk_[A-Za-z0-9]{16,}|csk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{16,}|"
     r"xox[bap]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"
-    r"(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?(?:key|token)?|password|passwd)"
-    r"[\"']?\s*[:=]\s*[\"'][A-Za-z0-9_./+\-]{8,}[\"'])", re.I)
+    # var=secret assignments, quoted ("api_key = 'abc…'") or dotenv-style (DB_PASSWORD=abc…)
+    r"[\w.-]*(?:api[_-]?key|apikey|token|secret|password|passwd|credential|private[_-]?key|"
+    r"auth[_-]?token|access[_-]?key)[\w.-]*\s*[:=]\s*(?:[\"'][^\"'\n]{4,}[\"']|[^\s\"'#]{6,}))", re.I)
 
 # File/folder names that almost always hold credentials — the read tools refuse them
 # outright so a cloud model never sees their contents (even via a project chat on a
 # real folder). Templates like .env.example stay blocked too: the same names usually
 # carry real values in user folders.
 _SENSITIVE_NAME = re.compile(
-    r"^(\.env($|\..*)|\.ssh$|\.aws$|\.azure$|\.gnupg$|\.kube$|\.docker$|\.terraform$|"
+    r"^(\.env($|\..*)|.*\.env$|\.ssh$|\.aws$|\.azure$|\.gnupg$|\.kube$|\.docker$|\.terraform$|"
     r"\.netrc$|\.npmrc$|\.pypirc$|\.git-credentials$|\.gitconfig-credentials$|"
     r"\.pgpass$|\.my?cnf$|config\.gcloud$|"
     r"(id_rsa|id_dsa|id_ecdsa|id_ed25519|id_xmss)(\.pub)?$|"
@@ -283,8 +284,8 @@ class Workspace:
         base = self.path(path)
         if shutil.which("rg"):
             args = ["rg", "-n", "--no-heading", "--max-count", "50",
-                    "-g", "!.env*", "-g", "!*.pem", "-g", "!*.key", "-g", "!id_*",
-                    "-g", "!.ssh", "-g", "!.aws", "-e", pattern, str(base)]
+                    "-g", "!.env*", "-g", "!*.env", "-g", "!*.pem", "-g", "!*.key",
+                    "-g", "!id_*", "-g", "!.ssh", "-g", "!.aws", "-e", pattern, str(base)]
         else:
             args = ["git", "grep", "-n", "-I", "-E", pattern, "--", str(base)]
         proc = await asyncio.create_subprocess_exec(*args, cwd=self.root, stdout=asyncio.subprocess.PIPE,

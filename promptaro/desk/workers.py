@@ -491,8 +491,28 @@ RUNNERS = {"claude_code": ClaudeCodeRun, "codex": CodexRun}
 
 # ------------------------------------------------------- chats on a plan
 CHAT_NOTE = ("You are answering questions in a Promptaro chat on the user's own plan. Answer "
-             "directly and briefly. You may read files to ground an answer, but never change "
-             "anything — no writes, no edits, no commands.")
+             "directly and briefly. You may read files in the working folder to ground an answer, "
+             "but never change anything — no writes, no edits, no commands — and never touch "
+             "credential files (.env, .ssh, keys) or anything outside the working folder.")
+
+# The plan tools read files with their OWN tools, which bypass Promptaro's Workspace
+# guards — so the same protection is expressed in their permission language.
+_SENSITIVE_GLOBS = (
+    "**/.env*", "**/*.env", "**/.ssh/**", "**/.aws/**", "**/.azure/**", "**/.gnupg/**",
+    "**/.kube/**", "**/.docker/**", "**/.terraform/**", "**/.netrc", "**/.npmrc",
+    "**/.pypirc", "**/.pgpass", "**/.my.cnf", "**/.git-credentials",
+    "**/id_rsa*", "**/id_dsa", "**/id_ecdsa*", "**/id_ed25519*", "**/id_xmss*",
+    "**/ssh_host_*_key*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx",
+    "**/*.keystore", "**/*.kubeconfig", "**/credentials*", "**/secrets.*",
+)
+# `**/` only reaches under the working folder — absolute reads like `Read ~/.ssh/…`
+# need home-anchored rules too.
+_HOME_GLOBS = tuple(f"{Path.home()}/{g}" for g in (
+    ".env*", ".ssh/**", ".aws/**", ".azure/**", ".gnupg/**", ".kube/**", ".docker/**",
+    ".terraform/**", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".my.cnf",
+    ".git-credentials", ".config/gcloud/**", ".claude/**", ".codex/**"))
+CHAT_DENY = [f"{t}({g})" for t in ("Read", "Grep")
+             for g in _SENSITIVE_GLOBS + _HOME_GLOBS]
 
 
 def _chat_space() -> Path:
@@ -532,10 +552,19 @@ class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
     engine = "claude_code"
 
     def args(self, exe, text, s, st):
-        # Read tools are auto-permitted; everything else is denied in print mode (no one to ask).
         a = [exe, "-p", text, "--output-format", "stream-json", "--verbose",
-             "--append-system-prompt", CHAT_NOTE,
-             "--allowedTools", "Read", "Grep", "Glob", "LS", "--disallowedTools", *NEVER_TOOLS]
+             "--append-system-prompt", CHAT_NOTE]
+        deny = list(CHAT_DENY)
+        if s.get("project"):
+            # Auto-allowed only inside the bound folder; any other read prompts and is
+            # denied in print mode. Credential-shaped paths are denied outright.
+            a += ["--allowedTools", "Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
+        else:
+            # Unbound chat: the scratch folder holds nothing worth reading, so the
+            # whole home directory is off limits — the model answers from the prompt.
+            deny += [f"{t}({Path.home()}/**)" for t in ("Read", "Grep")]
+        a += ["--disallowedTools", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
+              *NEVER_TOOLS, *deny]
         if self.variant:
             a += ["--model", self.variant]
         if st.get("claude_session"):
@@ -549,6 +578,11 @@ class CodexChatRun(_ChatRun, CodexRun):
     def args(self, exe, text, s, st):
         # read-only sandbox: can inspect the bound folder, can't change anything.
         common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
+        if not s.get("project"):
+            # Unbound chat: Codex's read-only sandbox can read the whole disk
+            # (~/.ssh included), and it has no per-file deny rules — so it gets no
+            # shell at all and answers from the prompt alone.
+            common += ["-c", "features.shell_tool=false", "-c", "features.unified_exec=false"]
         if self.variant:
             common += ["-m", self.variant]
         prompt = f"{CHAT_NOTE}\n\n{text}"

@@ -154,6 +154,7 @@ class Desk:
                 "complexity": res.profile.get("complexity"),
                 "why": res.route.get("reason", ""), "explain": why, "skills": res.skills,
                 "free": free, "tokens_in": tin, "tokens_out": tout,
+                "cost_note": spec.extra.get("cost_note", "") if spec else "",
                 "via": spec.extra.get("via", "") if spec else "", "retry": retry_of is not None,
                 "offline": (res.model == "offline")})
         except Exception as e:

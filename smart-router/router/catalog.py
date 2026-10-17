@@ -290,6 +290,8 @@ def custom_specs() -> list[dict]:
                 "provider": "openai_compatible", "model": m,
                 "api_key_env": ep.get("key_env", ""), "base_url": ep["base_url"],
                 "via": ep["label"], "free": local, "trains": bool(ep.get("trains", True)),
+                # remote endpoints may bill outside Promptaro — we can't see their prices
+                "cost_note": "" if local else "costs not tracked",
                 "vendor": "custom", "tier": tier, "context_window": int(ep.get("context", 32000)),
                 "capabilities": ["json"], "price": {"input": 0.0, "output": 0.0}, "latency_ms_p50": 1500,
                 "prior": {k: v - 0.08 for k, v in TIER_PRIOR[tier].items()}})
