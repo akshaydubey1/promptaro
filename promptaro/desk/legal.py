@@ -12,7 +12,7 @@ import time
 
 TERMS_VERSION = "1.0"
 
-TERMS_TEXT = f"""PROMPTARO — TERMS OF USE AND DISCLAIMER
+TERMS_TEXT = """PROMPTARO — TERMS OF USE AND DISCLAIMER
 Version {TERMS_VERSION} — Akshay Dubey
 
 By clicking "I agree" you accept these terms. If you do not agree, do not use Promptaro.
@@ -47,8 +47,8 @@ used and shared.
 
 6. Ownership. You own your inputs and, to the extent your provider's terms allow, the
 outputs generated for you. Promptaro itself is proprietary software of the Author; you
-get a personal, non-exclusive license to use it — not to sell it, sublicense it, or
-present it as your own.
+get a personal, non-exclusive, non-transferable license to use it — not to sell it,
+sublicense it, redistribute it, or present it as your own (see the LICENSE file).
 
 7. No warranty. TO THE MAXIMUM EXTENT PERMITTED BY LAW, PROMPTARO IS PROVIDED "AS IS"
 AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
@@ -72,9 +72,28 @@ party's terms.
 when they do. Where the law gives you rights that cannot be waived, this agreement
 limits liability only to the extent the law allows.
 
+11. Governing law and contact. These terms are governed by the laws of
+{GOVERNING_LAW}, without regard to conflict-of-laws rules. Where mandatory
+consumer-protection law where you live gives you stronger rights, those rights
+are unaffected. Contact the Author through the project page:
+github.com/akshaydubey1/promptaro.
+
 Acceptance is recorded on this computer only — the terms version and the date.
 Nothing about you is transmitted anywhere.
 """
+
+
+def _governing_law() -> str:
+    """Jurisdiction for the terms — the user's own, so it works in any country."""
+    try:
+        from router import catalog
+        return catalog.get_settings().get("governing_law") or "the jurisdiction where you reside"
+    except Exception:
+        return "the jurisdiction where you reside"
+
+
+def terms_text() -> str:
+    return TERMS_TEXT.format(TERMS_VERSION=TERMS_VERSION, GOVERNING_LAW=_governing_law())
 
 
 def accepted() -> bool:

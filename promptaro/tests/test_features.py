@@ -118,7 +118,7 @@ def test_chat_pick_uses_the_plan(client, claude, repo):
     allowed = argv[argv.index("--allowedTools") + 1:argv.index("--disallowedTools")]
     assert allowed == ["Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
     denied = argv[argv.index("--disallowedTools") + 1:]
-    assert "Read(**/.env*)" in denied and f"Read({Path.home()}/.ssh/**)" in denied
+    assert "Read(**/.env*)" in denied and "Read(~/.ssh/**)" in denied
 
 
 def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
@@ -522,7 +522,7 @@ def test_unbound_subscription_chat_cant_read_files(desk_factory):
     desk = desk_factory(Scripted())
     a = workers.ClaudeChatRun(desk, "x").args("claude", "hi", {}, {})
     denied = a[a.index("--disallowedTools") + 1:]
-    assert f"Read({Path.home()}/**)" in denied and "--allowedTools" not in a
+    assert "Read" in denied and "Grep" in denied and "Glob" in denied and "--allowedTools" not in a
     c = workers.CodexChatRun(desk, "x").args("codex", "hi", {}, {})
     assert "features.shell_tool=false" in c and "features.unified_exec=false" in c
     # bound to a project: reads stay on (sandboxed), writes still off
@@ -532,7 +532,7 @@ def test_unbound_subscription_chat_cant_read_files(desk_factory):
 
 def test_chat_deny_rules_cover_credentials(desk_factory):
     for pat in ("Read(**/.env*)", "Read(**/*.env)", "Read(**/id_rsa*)", "Read(**/*.pem)",
-                f"Read({Path.home()}/.ssh/**)", f"Read({Path.home()}/.aws/**)"):
+                "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.config/gcloud/**)"):
         assert pat in workers.CHAT_DENY, pat
     a = workers.ClaudeChatRun(desk_factory(Scripted()), "x").args("claude", "hi", {"project": "/tmp/p"}, {})
     denied = a[a.index("--disallowedTools") + 1:]

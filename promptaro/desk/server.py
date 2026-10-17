@@ -139,7 +139,7 @@ async def index():
 async def legal_status():
     """Current terms + whether this computer's user has accepted them."""
     from . import legal
-    return {"version": legal.TERMS_VERSION, "accepted": legal.accepted(), "terms": legal.TERMS_TEXT}
+    return {"version": legal.TERMS_VERSION, "accepted": legal.accepted(), "terms": legal.terms_text()}
 
 
 class LegalBody(BaseModel):
@@ -222,7 +222,7 @@ async def new_chat(b: NewChat):
                        "program files (x86)", "programdata", "recovery", "$recycle.bin"}
         parts = [x.lower() for x in root.parts if x not in (root.anchor, "/")]
         top = parts[1] if parts and parts[0] == "private" and len(parts) > 1 else (parts[0] if parts else "")
-        if top in _SYSTEM_TOP:
+        if top in _SYSTEM_TOP or parts in (["var"], ["private", "var"]):
             raise HTTPException(400, "That's a system folder, not a project — pick a folder "
                                      "with your own files in it.")
         fields["project"] = str(root)

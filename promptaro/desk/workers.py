@@ -506,8 +506,10 @@ _SENSITIVE_GLOBS = (
     "**/*.keystore", "**/*.kubeconfig", "**/credentials*", "**/secrets.*",
 )
 # `**/` only reaches under the working folder — absolute reads like `Read ~/.ssh/…`
-# need home-anchored rules too.
-_HOME_GLOBS = tuple(f"{Path.home()}/{g}" for g in (
+# need home-anchored rules too. Claude's permission syntax: `~` = your home folder,
+# `//` = absolute from the disk root; a single leading `/` is settings-relative and
+# does NOT mean an absolute path.
+_HOME_GLOBS = tuple(f"~/{g}" for g in (
     ".env*", ".ssh/**", ".aws/**", ".azure/**", ".gnupg/**", ".kube/**", ".docker/**",
     ".terraform/**", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".my.cnf",
     ".git-credentials", ".config/gcloud/**", ".claude/**", ".codex/**"))
@@ -561,8 +563,8 @@ class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
             a += ["--allowedTools", "Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
         else:
             # Unbound chat: the scratch folder holds nothing worth reading, so the
-            # whole home directory is off limits — the model answers from the prompt.
-            deny += [f"{t}({Path.home()}/**)" for t in ("Read", "Grep")]
+            # file tools go off entirely — same approach as Codex (no shell at all).
+            deny = ["Read", "Grep", "Glob", "LS"]
         a += ["--disallowedTools", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
               *NEVER_TOOLS, *deny]
         if self.variant:
