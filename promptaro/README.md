@@ -1,5 +1,7 @@
 # Promptaro
 
+**A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.**
+
 Author: Akshay Dubey
 
 *Promptaro was previously called Tillwright. Existing installs keep working: settings, keys,

@@ -1,5 +1,7 @@
 # Promptaro
 
+**A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.**
+
 Author: Akshay Dubey
 
 Every AI model, the right one for each task. This repository holds two parts that ship together:
