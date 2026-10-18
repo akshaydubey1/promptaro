@@ -64,7 +64,8 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 if [ ! -x .venv/bin/python ] || [ requirements.txt -nt .venv/.installed ]; then
   say "Setting up Promptaro (one time)…"
-  { uv venv --quiet --python 3.12 .venv && uv pip install --quiet --python .venv/bin/python -r requirements.txt; } >>"$LOG" 2>&1 \
+  { [ -x .venv/bin/python ] || uv venv --quiet --python 3.12 .venv
+    uv pip install --quiet --python .venv/bin/python -r requirements.txt; } >>"$LOG" 2>&1 \
     || fail "Setup didn't finish."
   touch .venv/.installed
 fi

@@ -45,11 +45,18 @@ instantly next time; **Connections → Quit Promptaro** stops it.
 | **Approvals** | Read-only and test commands run on their own. Anything else (deleting files, `git push`, network installs, redirects) waits for **Allow / Don't allow**. Destructive commands like `sudo` or `rm -rf ~` are always refused. Per task: ask for risky commands, ask for every command, or never ask. |
 | **Review** | The Changes panel shows the diff against where the agent started. Then **Merge into main**, **Open pull request** (uses `gh`), **Commit to branch**, **Open in VS Code** for last-mile edits, or **Discard**. |
 | **Works without AI** | Review, running commands in a task's copy, commit, merge, PR and discard are all plain code and work with nothing connected. |
+| **Project chat** | Bind a chat to a folder and the model reads your code (list/read/search only — it can never change or run anything) to ground its answers. |
+| **Your conversations** | Hover ✕ on any sidebar item to delete it; the header's ✕ just closes the view, and ⤓ downloads the whole conversation as Markdown (or `?format=json` for the raw events). |
+| **Studio** | Generate images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI and Cloudflare keys (optional), plus Pollinations which needs no key — tried best-first. Convert files locally: make or combine PDFs, and convert images, audio, video and documents between formats. Files never leave your Mac. |
 
 ## Free tokens for your coding tools
 
 Connect free keys from **Groq, Cerebras, NVIDIA NIM** (don't train on prompts), **Mistral, Codestral** (may train)
 or **Cohere** in Connections. Each row shows the provider's free limits and what you've used today.
+
+**Custom endpoints** (Connections) add any OpenAI-compatible API by base URL — Ollama, LM Studio, vLLM or a company
+proxy. Models are detected from the endpoint's `/models` or typed by hand; a key is optional and lives in the
+keychain. Mark an endpoint **Private** (local or company) and code may use it like the other private providers.
 
 Then open **Coding tools** in the sidebar and click **Add promptaro-claude, promptaro-aider and promptaro-env**:
 
@@ -88,7 +95,7 @@ Promptaro checks this computer for the two official coding tools that run on a p
 When either is signed in, **hard agent tasks** run on that plan instead of per-use API billing. If a plan hits its
 usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to the regular models if
 neither has room. Nothing to configure: Connections shows what was detected, and the Model menu lets you pick a
-plan for a task.
+plan — or a specific model under it (Claude Sonnet/Opus/Haiku, GPT-5 Codex/GPT-5/Codex mini) — for a task.
 
 Promptaro never reads or stores either login. It runs the unmodified `claude` or `codex` program in the task's
 own branch and shows its progress. Claude Code may only edit files and run tests and linters on its own (pushes,

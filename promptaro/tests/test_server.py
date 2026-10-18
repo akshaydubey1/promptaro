@@ -7,7 +7,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import Scripted, act
+from conftest import Scripted, act, drain_catalog_refresh
 
 H = {"x-promptaro": "1"}
 
@@ -16,6 +16,7 @@ H = {"x-promptaro": "1"}
 def client(router_root):
     from desk import server
     with TestClient(server.app) as c:
+        drain_catalog_refresh(c)
         fake = Scripted()
         server.desk.router.providers = {k: fake for k in ("anthropic", "openai", "openai_compatible", "offline")}
         # the router was built from router_root; disable live catalog effects

@@ -10,10 +10,13 @@ import asyncio
 import json
 import os
 import platform
+import re
+import secrets as pysecrets
 import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -25,7 +28,7 @@ if str(ROUTER_ROOT) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -38,7 +41,7 @@ from .build import build  # noqa: E402
 from .desk import Desk  # noqa: E402
 from .store import Store  # noqa: E402
 
-from router import migrate  # noqa: E402
+from router import migrate, secrets  # noqa: E402
 
 STARTED_BUILD = build()        # code version this process loaded
 DATA = migrate.home()
@@ -83,6 +86,20 @@ def _private_file(p: Path) -> None:
 
 
 @app.middleware("http")
+async def require_terms(request: Request, call_next):
+    """Nothing is served until the Terms of Use are accepted on this computer —
+    only the app shell, the terms endpoints and the health check stay open."""
+    from . import legal
+    p = request.url.path
+    open_path = p == "/" or p.startswith("/static") or p.startswith("/api/legal") \
+        or p in ("/healthz", "/favicon.ico")
+    if not open_path and not legal.accepted():
+        return JSONResponse({"detail": "terms_required", "version": legal.TERMS_VERSION},
+                            status_code=409)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def require_app_header(request: Request, call_next):
     """Blocks cross-site requests: a web page can't add this header without a
     CORS preflight, which this server never approves. Both the current
@@ -116,6 +133,26 @@ def _git_error(e: gitops.GitError):
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse(HERE / "ui" / "index.html", headers={"cache-control": "no-store"})
+
+
+@app.get("/api/legal")
+async def legal_status():
+    """Current terms + whether this computer's user has accepted them."""
+    from . import legal
+    return {"version": legal.TERMS_VERSION, "accepted": legal.accepted(), "terms": legal.terms_text()}
+
+
+class LegalBody(BaseModel):
+    version: str = Field(..., max_length=20)
+
+
+@app.post("/api/legal/accept")
+async def legal_accept(b: LegalBody):
+    from . import legal
+    if b.version != legal.TERMS_VERSION:
+        raise HTTPException(409, "The terms changed — read and accept the current version.")
+    legal.accept()
+    return {"accepted": True}
 
 
 @app.get("/healthz")
@@ -163,11 +200,33 @@ class NewChat(BaseModel):
     title: str = "New chat"
     prefer: Literal["balanced", "cheap", "fast", "best"] = "balanced"
     model: str = ""
+    project: str = ""                    # bind the chat to a folder: the model can read it for context
 
 
 @app.post("/api/sessions")
 async def new_chat(b: NewChat):
-    return desk.store.create("chat", b.title, prefer=b.prefer, model=b.model)
+    fields = {"prefer": b.prefer, "model": b.model}
+    if b.project.strip():
+        root = Path(b.project.strip()).expanduser().resolve()
+        if not root.is_dir():
+            raise HTTPException(400, "That folder doesn't exist. Choose a real project folder.")
+        home = Path.home().resolve()
+        if root == home or root in home.parents:
+            raise HTTPException(400, "Pick a project folder, not your home folder or a whole "
+                                     "drive — a project chat can read everything inside it.")
+        # OS and program directories are off limits too (they aren't "your project" —
+        # /etc, /System, C:\Windows all hold machine secrets the model could read).
+        # macOS resolves /etc -> /private/etc, so look past a leading "private".
+        _SYSTEM_TOP = {"etc", "usr", "bin", "sbin", "boot", "dev", "proc", "sys", "run", "snap",
+                       "opt", "system", "library", "windows", "program files",
+                       "program files (x86)", "programdata", "recovery", "$recycle.bin"}
+        parts = [x.lower() for x in root.parts if x not in (root.anchor, "/")]
+        top = parts[1] if parts and parts[0] == "private" and len(parts) > 1 else (parts[0] if parts else "")
+        if top in _SYSTEM_TOP or parts in (["var"], ["private", "var"]):
+            raise HTTPException(400, "That's a system folder, not a project — pick a folder "
+                                     "with your own files in it.")
+        fields["project"] = str(root)
+    return desk.store.create("chat", b.title, **fields)
 
 
 @app.get("/api/sessions/{sid}")
@@ -208,6 +267,68 @@ async def delete_session(sid: str):
         await gitops.discard(s["repo"], s["worktree"], s["branch"])
     desk.store.delete(sid)
     return {"ok": True}
+
+
+def export_markdown(s: dict, events: list[dict]) -> str:
+    """The whole conversation as Markdown — questions, answers, and an agent's work steps."""
+    verb = {"list_files": "Listed", "read_file": "Read", "search": "Searched",
+            "write_file": "Wrote", "edit_file": "Edited", "run": "Ran"}
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s.get("created") or 0))
+    head = [f"# {s['title']}", "",
+            f"_{s['kind'].capitalize()} · started {when} · "
+            f"{(s.get('tokens_in') or 0) + (s.get('tokens_out') or 0)} tokens · ${s.get('cost') or 0:.4f}_", ""]
+    if s.get("project"):
+        head.insert(2, f"_Project: {s['project']}_")
+        head.insert(3, "")
+    steps: list[str] = []
+
+    def flush() -> None:
+        if steps:
+            head.extend(("<details><summary>Work steps</summary>", "", *steps, "</details>", ""))
+            steps.clear()
+
+    for ev in events:
+        d = ev["data"] or {}
+        if ev["kind"] == "user":
+            flush()
+            head += ["## You", "", d.get("text", ""), ""]
+        elif ev["kind"] == "assistant":
+            flush()
+            who = d.get("name") or d.get("model") or "Assistant"
+            bits = [who, "Free" if d.get("free") else "Paid"]
+            if d.get("tokens_in") or d.get("tokens_out"):
+                bits.append(f"{(d.get('tokens_in') or 0) + (d.get('tokens_out') or 0)} tokens")
+            if d.get("cost"):
+                bits.append(f"${d['cost']:.4f}")
+            head += [f"## {' · '.join(bits)}", "", d.get("text", ""), ""]
+        elif ev["kind"] == "tool_call":
+            args = d.get("args") or {}
+            tgt = args.get("command") or args.get("path") or args.get("pattern") or ""
+            steps.append(f"- {verb.get(d.get('action'), d.get('action', '?'))} {tgt}".rstrip())
+        elif ev["kind"] == "thought":
+            steps.append(f"  - _{d.get('text', '')[:300]}_")
+        elif ev["kind"] == "finish":
+            flush()
+            if d.get("summary"):
+                head += ["## Summary", "", d["summary"], ""]
+        elif ev["kind"] in ("note", "error", "workspace", "git"):
+            flush()
+            head.append(f"> {d.get('text') or d.get('summary') or ''}")
+            head.append("")
+    flush()
+    return "\n".join(head) + "\n"
+
+
+@app.get("/api/sessions/{sid}/export")
+async def export_session(sid: str, format: Literal["md", "json"] = "md"):
+    s = _s(sid)
+    slug = "".join(c if c.isalnum() else "-" for c in s["title"].lower()).strip("-")[:60] or sid
+    events = desk.store.events(sid)
+    if format == "json":
+        return JSONResponse({"session": s, "events": events},
+                            headers={"content-disposition": f'attachment; filename="promptaro-{slug}.json"'})
+    return Response(export_markdown(s, events), media_type="text/markdown",
+                    headers={"content-disposition": f'attachment; filename="promptaro-{slug}.md"'})
 
 
 class Msg(BaseModel):
@@ -442,13 +563,20 @@ async def models():
     reg = desk.router.registry
     usable = {m.id for m in reg.usable()}
     st = await subs()
-    extra = [{"id": mid, "name": name, "via": "subscription", "tier": 3, "free": False, "subscription": True,
-              "price_in": 0, "price_out": 0}
-             for mid, key, name in (("claude-code", "claude_code", "Claude Code (your Claude subscription)"),
-                                    ("codex", "codex", "Codex (your ChatGPT subscription)"))
-             if st[key]["subscription"]]
+    from .workers import MODEL_CHOICES
+    extra = []
+    for mid, key, name in (("claude-code", "claude_code", "Claude Code (your Claude subscription)"),
+                           ("codex", "codex", "Codex (your ChatGPT subscription)")):
+        if not st[key]["subscription"]:
+            continue
+        entry = {"via": "subscription", "tier": 3, "free": False, "subscription": True,
+                 "price_in": 0, "price_out": 0}
+        extra.append({"id": mid, "name": name, **entry})
+        for vid, vlabel in MODEL_CHOICES.get(key, {}).items():     # per-model picks under the same plan
+            extra.append({"id": f"{mid}:{vid}", "name": f"{vlabel} (subscription)", **entry})
     return extra + [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""), "tier": m.tier,
              "free": bool(m.extra.get("free")), "vendor": m.extra.get("vendor", ""),
+             "cost_note": m.extra.get("cost_note", ""),
              "price_in": round(m.price_in, 3), "price_out": round(m.price_out, 3)}
             for m in sorted(reg.models.values(), key=lambda m: (m.tier, m.price_in))
             if m.id in usable and m.provider != "offline"]
@@ -512,6 +640,163 @@ async def projects():
             seen.add(p)
             out.append(p)
     return out[:12]
+
+
+@app.get("/api/project-names")
+async def project_names():
+    """Display names the user gave project folders ({path: name}); groups still key on the real path."""
+    from router.catalog import get_settings
+    return get_settings().get("project_names") or {}
+
+
+class ProjName(BaseModel):
+    path: str
+    name: str = ""
+
+
+@app.post("/api/projects/rename")
+async def rename_project(b: ProjName):
+    """Name a project group in the sidebar; empty name returns to the folder's own name."""
+    from router.catalog import get_settings, set_settings
+    names = dict(get_settings().get("project_names") or {})
+    if b.name.strip():
+        names[b.path] = b.name.strip()[:60]
+    else:
+        names.pop(b.path, None)
+    set_settings(project_names=names)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------ file tools
+def _tools_out() -> Path:
+    d = DATA / "tools_out"
+    _private_dir(d)
+    return d
+
+
+@app.get("/api/tools/capabilities")
+async def tools_capabilities():
+    """What the Studio can do right now: converters present, media providers connected."""
+    from . import convert
+    from router import catalog, media
+    return {"convert": convert.capabilities(), "media": media.status(),
+            "paid_media": bool(catalog.get_settings().get("paid_media"))}
+
+
+class GenBody(BaseModel):
+    kind: Literal["image", "video"] = "image"
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    size: Literal["square", "portrait", "landscape", "hd"] = "square"
+
+
+_GEN_SIZES = {"square": (1024, 1024), "portrait": (768, 1152), "landscape": (1152, 768), "hd": (1280, 720)}
+_MIME_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+             "video/mp4": "mp4", "video/webm": "webm"}
+
+
+@app.post("/api/tools/generate")
+async def tool_generate(b: GenBody):
+    """Free-tier image/video generation; tries each connected provider best-first."""
+    from router import media
+    w, h = _GEN_SIZES[b.size]
+    try:
+        data, mime, provider = await asyncio.to_thread(media.generate, b.kind, b.prompt, w, h)
+    except Exception as e:
+        raise HTTPException(400, secrets.redact(str(e))[:400])
+    name = f"{b.kind}-{pysecrets.token_hex(4)}.{_MIME_EXT.get(mime, 'png' if b.kind == 'image' else 'mp4')}"
+    (_tools_out() / name).write_bytes(data)
+    return {"file": name, "url": f"/api/tools/output/{urllib.parse.quote(name)}", "provider": provider,
+            "bytes": len(data)}
+
+
+@app.post("/api/tools/pick-files")
+async def tool_pick_files():
+    """The system's own file chooser; returns real paths on this machine."""
+    system = platform.system()
+    if system == "Darwin":
+        script = ('set f to choose file with prompt "Choose files" with multiple selections allowed\n'
+                  'set o to ""\nrepeat with i in f\nset o to o & POSIX path of i & "\\n"\nend repeat\no')
+        cmd = ["osascript", "-e", script]
+    elif system == "Windows":
+        cmd = ["powershell", "-NoProfile", "-STA", "-Command",
+               "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; "
+               "$d.Multiselect = $true; if ($d.ShowDialog() -eq 'OK') { $d.FileNames -join \"`n\" }"]
+    elif shutil.which("zenity"):
+        cmd = ["zenity", "--file-selection", "--multiple", "--separator=\n", "--title=Choose files"]
+    elif shutil.which("kdialog"):
+        cmd = ["kdialog", "--getopenfilename", str(Path.home()), "*", "--multiple", "--separate-output"]
+    else:
+        raise HTTPException(501, "Type or paste the file paths.")
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return {"paths": []}
+    return {"paths": [p for p in out.decode().splitlines() if p.strip()]}
+
+
+class ConvertBody(BaseModel):
+    action: Literal["make-pdf", "merge-pdf", "convert"] = "convert"
+    inputs: list[str] = Field(..., min_length=1)
+    format: str = ""                            # required for action=convert
+    name: str = ""                              # output filename base for make-pdf / merge-pdf
+
+
+@app.post("/api/tools/convert")
+async def tool_convert(b: ConvertBody):
+    from . import convert
+    try:
+        inputs = convert.resolve_inputs(b.inputs)
+        out_dir = _tools_out()
+        if b.action == "make-pdf":
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or inputs[0].stem).strip())[:60] or "document"
+            out = await asyncio.to_thread(convert.make_pdf, inputs,
+                                          convert.unique_path(out_dir / f"{slug}.pdf"))
+            results = [out]
+        elif b.action == "merge-pdf":
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (b.name or "combined").strip())[:60] or "combined"
+            out = await asyncio.to_thread(convert.merge_pdfs, inputs,
+                                          convert.unique_path(out_dir / f"{slug}.pdf"))
+            results = [out]
+        else:
+            fmt = re.sub(r"[^a-z0-9]", "", b.format.lower())
+            if not fmt:
+                raise HTTPException(400, "Choose a target format.")
+            results = [await asyncio.to_thread(convert.convert, p, out_dir, fmt) for p in inputs]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, secrets.redact(str(e))[:300])
+    return {"outputs": [{"name": p.name, "url": f"/api/tools/output/{urllib.parse.quote(p.name)}",
+                         "bytes": p.stat().st_size} for p in results]}
+
+
+# Output filenames may have spaces, unicode and brackets — anything except path separators.
+_SAFE_NAME = re.compile(r"^[^/\\]{1,200}$")
+
+
+@app.get("/api/tools/output/{name}")
+async def tool_output(name: str):
+    if not _SAFE_NAME.match(name):
+        raise HTTPException(404)
+    p = (_tools_out() / name).resolve()
+    if not p.is_file() or _tools_out() not in p.parents:
+        raise HTTPException(404)
+    return FileResponse(p, filename=name)
+
+
+@app.post("/api/tools/reveal")
+async def tool_reveal(b: ProjName):
+    """Show an output file in the system file manager."""
+    if not _SAFE_NAME.match(b.path):
+        raise HTTPException(404)
+    p = (_tools_out() / b.path).resolve()
+    if not p.is_file() or _tools_out() not in p.parents:
+        raise HTTPException(404)
+    system = platform.system()
+    cmd = {"Darwin": ["open", "-R", str(p)], "Windows": ["explorer", "/select,", str(p)]}.get(system) \
+        or ["xdg-open", str(p.parent)]
+    await asyncio.create_subprocess_exec(*cmd)
+    return {"ok": True}
 
 
 @app.post("/api/pick-folder")

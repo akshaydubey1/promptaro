@@ -35,8 +35,46 @@ HARD_TASK = 0.45          # complexity at or above this goes to a subscription
 REST_S = 3600             # how long a plan rests after hitting its usage limit
 ENGINES = ("claude_code", "codex")
 MODEL_IDS = {"claude-code": "claude_code", "codex": "codex"}      # Model menu id -> engine
+# Extra picks under each plan, e.g. "claude-code:opus" -> claude -p --model opus.
+# Aliases ("opus") follow the newest version the plan serves; pinned names hold a
+# generation. This list only contains ids verified against a live Claude Code
+# 2.1.267 install (Jul 2026): mythos/haiku-4/sonnet-3 ids are rejected by that
+# catalog and opus-4/sonnet-4 are retired. "best"/"fable" resolve to Fable 5.1,
+# which needs usage credits on plans that don't include it — the run then fails
+# cleanly and the usual fallback picks up. Codex has no aliases; ids track the
+# current generation, and an id a plan can't serve just falls back too.
+MODEL_CHOICES = {
+    "claude_code": {
+        "sonnet": "Claude Sonnet (latest)",
+        "opus": "Claude Opus (latest)",
+        "haiku": "Claude Haiku (latest)",
+        "claude-sonnet-5": "Claude Sonnet 5",
+        "claude-opus-5": "Claude Opus 5",
+        "fable": "Claude Fable (needs usage credits)",
+        "best": "Claude — best available (needs usage credits)",
+    },
+    "codex": {
+        "gpt-5.4": "GPT-5.4",
+        "gpt-5.4-mini": "GPT-5.4 mini",
+        "gpt-5.3-codex": "GPT-5.3 Codex",
+        "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
+        "gpt-5.2-codex": "GPT-5.2 Codex",
+        "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+        "gpt-5.1-codex": "GPT-5.1 Codex",
+        "gpt-5.1-codex-mini": "GPT-5.1 Codex mini",
+        "gpt-5-codex": "GPT-5 Codex",
+        "gpt-5": "GPT-5",
+        "codex-mini-latest": "Codex mini (legacy)",
+    },
+}
 LABEL = {"claude_code": "Claude Code", "codex": "Codex"}
 PLAN = {"claude_code": "your Claude subscription", "codex": "your ChatGPT subscription"}
+
+
+def engine_of(model_id: str) -> tuple[str, str]:
+    """A model-menu id -> (engine, model variant): "claude-code:opus" -> ("claude_code", "opus")."""
+    base, _, variant = (model_id or "").partition(":")
+    return MODEL_IDS.get(base, ""), variant
 _LIMIT_RE = re.compile(r"usage limit|rate.?limit|limit reached|quota|too many requests|\b429\b|out of credits", re.I)
 
 _status_cache: dict[str, tuple[float, dict]] = {}
@@ -216,6 +254,7 @@ class _CliRun:
         self.desk, self.sid = desk, sid
         self.store = desk.store
         self.limited = False            # True when the plan's usage limit stopped the run
+        self.variant = ""               # per-model pick under the plan ("claude-code:opus" -> "opus")
 
     def args(self, exe: str, text: str, s: dict, st: dict) -> list[str]:
         raise NotImplementedError
@@ -230,6 +269,18 @@ class _CliRun:
     def exe(self) -> str | None:
         raise NotImplementedError
 
+    def cwd(self, s: dict) -> str:
+        return s["worktree"]
+
+    def why(self) -> str:
+        return f"hard task, so it runs on {PLAN[self.engine]} instead of per-use billing"
+
+    def emit_ok(self, summary: str, usage: dict) -> None:
+        """What a finished turn looks like: a review card for agent runs."""
+        self.store.emit(self.sid, "finish", {"summary": summary[:6000] or "Done.", "tests": "not_run",
+                                             "subscription": True})
+        self.store.update(self.sid, status="review")
+
     async def run(self, text: str) -> bool:
         """True if the tool finished the turn; False means: fall back (other plan or the router agent)."""
         store, sid = self.store, self.sid
@@ -238,15 +289,17 @@ class _CliRun:
         exe = self.exe()
         if not exe:
             return False
+        eng, var = engine_of(s.get("model"))
+        self.variant = var if eng == self.engine else ""    # a fallback engine ignores another plan's pick
+        name = LABEL[self.engine] if not self.variant else MODEL_CHOICES[self.engine].get(self.variant, self.variant)
         store.update(sid, status="running")
-        store.emit(sid, "model", {"model": self.engine.replace("_", "-"), "name": LABEL[self.engine],
+        store.emit(sid, "model", {"model": s.get("model") or self.engine.replace("_", "-"), "name": name,
                                   "via": PLAN[self.engine], "subscription": True,
-                                  "why": f"hard task, so it runs on {PLAN[self.engine]} instead of per-use billing",
-                                  "explain": {"level": "hard", "because": "hard agent work runs on a plan you "
-                                              "already pay for, so it adds no per-use cost.",
+                                  "why": self.why(),
+                                  "explain": {"level": "hard", "because": self.why(),
                                               "subscription": True}})
         try:
-            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=s["worktree"],
+            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=self.cwd(s),
                                                         env=_worker_env(), stdout=asyncio.subprocess.PIPE,
                                                         stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
                                                         limit=16 * 1024 * 1024)
@@ -286,9 +339,7 @@ class _CliRun:
             store.add_usage(sid, 0.0, usage.get("tokens_in", 0), usage.get("tokens_out", 0))   # included in plan
             self.desk.count_subscription_run(sid, usage)
         if ok:
-            store.emit(sid, "finish", {"summary": summary[:6000] or "Done.", "tests": "not_run",
-                                       "subscription": True})
-            store.update(sid, status="review")
+            self.emit_ok(summary, usage)
             return True
         reason = summary or err or f"exit {proc.returncode}"
         if hit_limit(reason):
@@ -315,6 +366,8 @@ class ClaudeCodeRun(_CliRun):
 
     def args(self, exe, text, s, st):
         a = [exe, "-p", text, "--output-format", "stream-json", "--verbose", "--append-system-prompt", WORKER_NOTE]
+        if self.variant:
+            a += ["--model", self.variant]
         if (s.get("approval") or "ask_risky") == "never_ask":
             a += ["--permission-mode", "bypassPermissions", "--disallowedTools", *NEVER_TOOLS]
         else:
@@ -376,6 +429,8 @@ class CodexRun(_CliRun):
     def args(self, exe, text, s, st):
         # workspace-write: may edit files inside the task's copy only; no network. `exec` never stops to ask.
         common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"']
+        if self.variant:
+            common += ["-m", self.variant]
         prompt = f"{WORKER_NOTE}\n\n{text}"
         if st.get("codex_session"):
             return [exe, "exec", "resume", *common, st["codex_session"], prompt]
@@ -432,3 +487,110 @@ class CodexRun(_CliRun):
 
 
 RUNNERS = {"claude_code": ClaudeCodeRun, "codex": CodexRun}
+
+
+# ------------------------------------------------------- chats on a plan
+CHAT_NOTE = ("You are answering questions in a Promptaro chat on the user's own plan. Answer "
+             "directly and briefly. You may read files in the working folder to ground an answer, "
+             "but never change anything — no writes, no edits, no commands — and never touch "
+             "credential files (.env, .ssh, keys) or anything outside the working folder.")
+
+# The plan tools read files with their OWN tools, which bypass Promptaro's Workspace
+# guards — so the same protection is expressed in their permission language.
+_SENSITIVE_GLOBS = (
+    "**/.env*", "**/*.env", "**/.ssh/**", "**/.aws/**", "**/.azure/**", "**/.gnupg/**",
+    "**/.kube/**", "**/.docker/**", "**/.terraform/**", "**/.netrc", "**/.npmrc",
+    "**/.pypirc", "**/.pgpass", "**/.my.cnf", "**/.git-credentials",
+    "**/id_rsa*", "**/id_dsa", "**/id_ecdsa*", "**/id_ed25519*", "**/id_xmss*",
+    "**/ssh_host_*_key*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx",
+    "**/*.keystore", "**/*.kubeconfig", "**/credentials*", "**/secrets.*",
+)
+# `**/` only reaches under the working folder — absolute reads like `Read ~/.ssh/…`
+# need home-anchored rules too. Claude's permission syntax: `~` = your home folder,
+# `//` = absolute from the disk root; a single leading `/` is settings-relative and
+# does NOT mean an absolute path.
+_HOME_GLOBS = tuple(f"~/{g}" for g in (
+    ".env*", ".ssh/**", ".aws/**", ".azure/**", ".gnupg/**", ".kube/**", ".docker/**",
+    ".terraform/**", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".my.cnf",
+    ".git-credentials", ".config/gcloud/**", ".claude/**", ".codex/**"))
+CHAT_DENY = [f"{t}({g})" for t in ("Read", "Grep")
+             for g in _SENSITIVE_GLOBS + _HOME_GLOBS]
+
+
+def _chat_space() -> Path:
+    """Empty scratch dir for unbound chats, so even read-only tools see nothing else."""
+    from router import catalog
+    d = catalog.HOME / "chat-space"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class _ChatRun(_CliRun):
+    """One chat turn through a plan tool — read-only, and the reply lands as a normal chat
+    answer (not an agent review card). Session resumption keeps the conversation going."""
+
+    def cwd(self, s: dict) -> str:
+        return s.get("project") or str(_chat_space())
+
+    def why(self) -> str:
+        return f"your pick — answered on {PLAN[self.engine]} instead of per-use billing"
+
+    def emit_ok(self, summary: str, usage: dict) -> None:
+        s, sid = self.store.get(self.sid), self.sid
+        name = LABEL[self.engine] if not self.variant \
+            else MODEL_CHOICES[self.engine].get(self.variant, self.variant)
+        self.store.emit(sid, "assistant", {
+            "text": summary[:6000] or "Done.", "model": s.get("model") or self.engine.replace("_", "-"),
+            "name": name, "via": PLAN[self.engine], "subscription": True, "passed": True,
+            "cached": False, "cost": 0.0, "calls": 1, "free": False,
+            "tokens_in": usage.get("tokens_in", 0), "tokens_out": usage.get("tokens_out", 0),
+            "why": f"answered on {PLAN[self.engine]} — included in your plan, no per-use cost",
+            "explain": {"subscription": True, "because": "answered on a plan you already pay for"},
+            "offline": False})
+        self.store.update(sid, status="idle")
+
+
+class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
+    engine = "claude_code"
+
+    def args(self, exe, text, s, st):
+        a = [exe, "-p", text, "--output-format", "stream-json", "--verbose",
+             "--append-system-prompt", CHAT_NOTE]
+        deny = list(CHAT_DENY)
+        if s.get("project"):
+            # Auto-allowed only inside the bound folder; any other read prompts and is
+            # denied in print mode. Credential-shaped paths are denied outright.
+            a += ["--allowedTools", "Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
+        else:
+            # Unbound chat: the scratch folder holds nothing worth reading, so the
+            # file tools go off entirely — same approach as Codex (no shell at all).
+            deny = ["Read", "Grep", "Glob", "LS"]
+        a += ["--disallowedTools", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
+              *NEVER_TOOLS, *deny]
+        if self.variant:
+            a += ["--model", self.variant]
+        if st.get("claude_session"):
+            a += ["--resume", st["claude_session"]]
+        return a
+
+
+class CodexChatRun(_ChatRun, CodexRun):
+    engine = "codex"
+
+    def args(self, exe, text, s, st):
+        # read-only sandbox: can inspect the bound folder, can't change anything.
+        common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
+        if not s.get("project"):
+            # Unbound chat: Codex's read-only sandbox can read the whole disk
+            # (~/.ssh included), and it has no per-file deny rules — so it gets no
+            # shell at all and answers from the prompt alone.
+            common += ["-c", "features.shell_tool=false", "-c", "features.unified_exec=false"]
+        if self.variant:
+            common += ["-m", self.variant]
+        prompt = f"{CHAT_NOTE}\n\n{text}"
+        if st.get("codex_session"):
+            return [exe, "exec", "resume", *common, st["codex_session"], prompt]
+        return [exe, "exec", *common, prompt]
+
+
+CHAT_RUNNERS = {"claude_code": ClaudeChatRun, "codex": CodexChatRun}

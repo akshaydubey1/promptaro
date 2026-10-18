@@ -20,6 +20,7 @@ import re
 import hashlib
 import secrets as pysecrets
 import time
+import urllib.parse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -44,6 +45,18 @@ VENDORS = {
                "get_key_url": "https://platform.openai.com/api-keys"},
     "google": {"key": "GEMINI_API_KEY", "label": "Google (Gemini)",
                "get_key_url": "https://aistudio.google.com/app/apikey"},
+    # Free image/video generation keys — used by Tools > Generate, not by chat routing.
+    # probe: (url, header name, header value template) — a cheap call that proves the key works.
+    "huggingface": {"key": "HF_TOKEN", "label": "Hugging Face", "media": True,
+                    "get_key_url": "https://huggingface.co/settings/tokens",
+                    "probe": ("https://huggingface.co/api/whoami-v2", "authorization", "Bearer {k}")},
+    "together": {"key": "TOGETHER_API_KEY", "label": "Together AI", "media": True,
+                 "get_key_url": "https://api.together.ai/settings/api-keys",
+                 "probe": ("https://api.together.xyz/v1/models", "authorization", "Bearer {k}")},
+    "cloudflare": {"key": "CLOUDFLARE_API_TOKEN", "label": "Cloudflare Workers AI", "media": True,
+                   "get_key_url": "https://dash.cloudflare.com/profile/api-tokens",
+                   "probe": ("https://api.cloudflare.com/client/v4/user/tokens/verify",
+                             "authorization", "Bearer {k}")},
 }
 
 for _p in FREE_PROVIDERS.values():                 # free tiers: one key each, checked against the provider
@@ -69,13 +82,20 @@ async def status(request: Request):
         "free_quota": catalog.FREE.snapshot() if secrets.has("OPENROUTER_API_KEY") else None,
         "families": vendors,
         "connections": {v: {"label": d["label"], "connected": secrets.has(d["key"]), "get_key_url": d["get_key_url"]}
-                        for v, d in VENDORS.items() if not d.get("free")},
+                        for v, d in VENDORS.items() if not d.get("free") and not d.get("media")},
+        "media_providers": {v: {"label": d["label"], "connected": secrets.has(d["key"]),
+                                "get_key_url": d["get_key_url"], "needs_account_id": v == "cloudflare",
+                                "account_id": bool(secrets.has("CLOUDFLARE_ACCOUNT_ID")) if v == "cloudflare" else None}
+                            for v, d in VENDORS.items() if d.get("media")},
         "free_providers": [{"id": fp.id, "label": fp.label, "connected": secrets.has(fp.key_env),
                             "get_key_url": fp.get_key_url, "trains": fp.trains, "limits": fp.limits,
                             "note": fp.note, "checked": fp.checked, "source": fp.source}
                            for fp in FREE_PROVIDERS.values()],
         "free_usage": quota.LEDGER.snapshot(list(r.registry.usable())),
         "ollama": await asyncio.to_thread(catalog.ollama_models),
+        "endpoints": [{"id": e["id"], "label": e["label"], "base_url": e["base_url"],
+                       "models": e.get("models", []), "has_key": bool(e.get("key_env")),
+                       "private": not e.get("trains", True)} for e in catalog.custom_endpoints()],
         "settings": catalog.get_settings(),
         "models": [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""),
                     "free": bool(m.extra.get("free")),
@@ -125,14 +145,16 @@ class SettingsBody(BaseModel):
     free_models: str | None = Field(None, pattern="^(off|chat|all)$")
     gateway_spend: str | None = Field(None, pattern="^(free|paid_ok)$")
     daily_budget_usd: float | None = Field(None, ge=0, le=10000)
+    paid_media: bool | None = None        # let Studio use image models that may bill a key
 
 
 @api.post("/connect/settings")
 async def save_settings(body: SettingsBody, request: Request):
     """free_models: off | chat (default) | all.  gateway_spend: free (default) | paid_ok.
-    daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap."""
+    daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap.
+    paid_media: opt in to image providers that can charge once free quotas run out."""
     d = catalog.set_settings(free_models=body.free_models, gateway_spend=body.gateway_spend,
-                             daily_budget_usd=body.daily_budget_usd)
+                             daily_budget_usd=body.daily_budget_usd, paid_media=body.paid_media)
     await asyncio.to_thread(_router(request).reload)
     return d
 
@@ -158,6 +180,69 @@ async def refresh(request: Request):
     return {"ok": True}
 
 
+class EndpointBody(BaseModel):
+    label: str = Field(..., min_length=1, max_length=60)
+    base_url: str = Field(..., min_length=8, max_length=300)
+    models: str = ""                    # comma-separated ids; blank = ask the endpoint for its list
+    key: str | None = None              # optional API key, kept in the keychain like every other key
+    private: bool = False               # local or company endpoint that can't train on prompts
+    tier: int = Field(2, ge=1, le=3)
+
+
+@api.post("/connect/endpoints")
+async def add_endpoint(body: EndpointBody, request: Request):
+    """Add any OpenAI-compatible endpoint — Ollama, LM Studio, vLLM or a company proxy."""
+    base = body.base_url.strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        raise HTTPException(400, "The address must start with http:// or https:// (usually it ends in /v1).")
+    host = catalog.endpoint_host(base)
+    if base.startswith("http://") and not catalog.is_loopback(host):
+        raise HTTPException(400, "A remote endpoint must use https:// — plain http would send "
+                                 "your prompts and key unencrypted. http:// is fine for localhost "
+                                 "(Ollama, LM Studio).")
+    local = catalog.is_local_net(host)
+    eid = "ep-" + pysecrets.token_hex(4)
+    key_env = ""
+    if (body.key or "").strip():
+        key_env = f"CUSTOM_{eid.replace('-', '_').upper()}_KEY"
+        secrets.set(key_env, clean_key(body.key))
+    typed = [m.strip() for m in body.models.split(",") if m.strip()]
+    found: list[str] = []
+    try:
+        found = await asyncio.to_thread(catalog.discover_endpoint_models, base, key_env)
+    except Exception as e:
+        if not typed:                                        # nothing to fall back on: the endpoint must answer
+            if key_env:
+                secrets.delete(key_env)
+            raise HTTPException(400, f"Couldn't reach {base}/models: {_provider_reason(e)}")
+    models = (typed or found)[:8]
+    if not models:
+        if key_env:
+            secrets.delete(key_env)
+        raise HTTPException(400, "No models listed — type at least one model id.")
+    ep = {"id": eid, "label": body.label.strip(), "base_url": base, "models": models,
+          "key_env": key_env, "trains": not body.private and not local, "tier": body.tier,
+          "local": local}
+    catalog.note_endpoint_models(eid, found or models)
+    catalog.save_endpoint(ep)
+    await asyncio.to_thread(_router(request).reload)
+    out = {k: v for k, v in ep.items() if k != "key_env"} | {"has_key": bool(key_env)}
+    return {"connected": True, "endpoint": out, "models": len(models)}
+
+
+@api.delete("/connect/endpoints/{eid}")
+async def remove_endpoint(eid: str, request: Request):
+    for ep in catalog.custom_endpoints():
+        if ep.get("id") == eid:
+            if ep.get("key_env"):
+                secrets.delete(ep["key_env"])
+            catalog.drop_endpoint(eid)
+            (catalog.HOME / f"custom_{eid}.json").unlink(missing_ok=True)
+            await asyncio.to_thread(_router(request).reload)
+            return {"connected": False}
+    raise HTTPException(404, "unknown endpoint")
+
+
 class KeyBody(BaseModel):
     key: str = Field(..., min_length=8, max_length=500)
     workspace_id: str | None = Field(None, max_length=100)   # Anthropic organization-scoped keys only
@@ -181,6 +266,8 @@ def detect_vendor(key: str) -> str | None:
         return free
     if k.startswith("sk-or-"):
         return "openrouter"
+    if k.startswith("hf_"):
+        return "huggingface"
     if k.startswith("sk-ant-"):
         return "anthropic"
     if k.startswith("AIza"):
@@ -257,11 +344,18 @@ async def _connect(vendor: str, raw_key: str, request: Request, workspace_id: st
         secrets.delete("ANTHROPIC_WORKSPACE_ID")          # a new key starts clean
         if ws:
             secrets.set("ANTHROPIC_WORKSPACE_ID", ws)
+    if vendor == "cloudflare" and ws:                     # Workers AI calls need the account id too
+        secrets.set("CLOUDFLARE_ACCOUNT_ID", ws)
     secrets.set(name, key)
     try:
         if vendor == "openrouter":
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get("https://openrouter.ai/api/v1/key", headers={"authorization": f"Bearer {key}"})
+                r.raise_for_status()
+        elif VENDORS[vendor].get("probe"):
+            url, hname, hval = VENDORS[vendor]["probe"]
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(url, headers={hname: hval.format(k=key)})
                 r.raise_for_status()
         elif vendor in FREE_PROVIDERS:
             ids = await asyncio.to_thread(catalog.discover_free, vendor)

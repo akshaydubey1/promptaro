@@ -44,22 +44,94 @@ document.addEventListener("click", (e) => {
 });
 
 /* ---------------- sidebar ---------------- */
-async function loadSessions() { S.sessions = await api("/api/sessions"); renderSide(); }
+async function loadSessions() {
+  [S.sessions, S.projNames] = await Promise.all([api("/api/sessions"), api("/api/project-names")]);
+  renderSide();
+}
+const projBase = (p) => (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
+const projName = (p) => (S.projNames || {})[p] || projBase(p);
+function collapsedProjs() {
+  try { return new Set(JSON.parse(localStorage.getItem("promptaro:projCollapsed") || "[]")); } catch { return new Set(); }
+}
 function renderSide() {
-  const agents = S.sessions.filter((s) => s.kind === "agent"), chats = S.sessions.filter((s) => s.kind === "chat");
-  const row = (s) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}</li>`;
-  $("agentList").innerHTML = agents.map(row).join("") || `<li class="empty-note">No agents yet</li>`;
-  $("chatList").innerHTML = chats.map(row).join("") || `<li class="empty-note">No chats yet</li>`;
+  const row = (s, inProj) => `<li class="item ${s.id === S.current ? "active" : ""}" data-sid="${s.id}"><span class="status ${esc(s.status)}" title="${esc(statusText(s.status))}"></span><span class="name">${esc(s.title)}${!inProj && s.project ? `<span class="sub"> · ${esc(projName(s.project))}</span>` : ""}${inProj && s.kind === "agent" ? `<span class="sub tag">agent</span>` : ""}</span>${s.kind === "agent" && s.cost ? `<span class="sub">$${(+s.cost).toFixed(2)}</span>` : ""}<button class="x ren" data-ren="${s.id}" title="Rename" aria-label="Rename conversation">✏</button><button class="x" data-del="${s.id}" title="Delete" aria-label="Delete conversation">✕</button></li>`;
+  const unbound = S.sessions.filter((s) => !s.project);
+  const projects = new Map();                                  // path -> sessions, first-seen order
+  for (const s of S.sessions) if (s.project) (projects.get(s.project) || projects.set(s.project, []).get(s.project)).push(s);
+  const collapsed = collapsedProjs();
+  let html = `<div class="group"><h3>Chats</h3><ul>${unbound.map((s) => row(s)).join("") || `<li class="empty-note">No chats yet</li>`}</ul></div>`;
+  if (projects.size) {
+    html += `<div class="group"><h3>Projects</h3>`;
+    for (const [p, items] of projects) {
+      const shut = collapsed.has(p);
+      html += `<div class="proj"><h4 class="proj-head" data-proj="${esc(p)}" title="${esc(p)}"><span class="chev${shut ? " shut" : ""}">▾</span>📁 ${esc(projName(p))}<span class="count">${items.length}</span><button class="x ren" data-ren-proj="${esc(p)}" title="Rename project" aria-label="Rename project">✏</button><button class="x add" data-add-chat="${esc(p)}" title="New chat in ${esc(projName(p))}" aria-label="New chat in this project">＋</button></h4><ul${shut ? ' class="hidden"' : ""}>${items.map((s) => row(s, true)).join("")}</ul></div>`;
+    }
+    html += `</div>`;
+  }
+  $("lists").innerHTML = html;
 }
 const statusText = (s) => ({ running: "Working", waiting: "Needs your approval", review: "Ready for review", done: "Merged", discarded: "Discarded", stopped: "Stopped", idle: "Idle" }[s] || s);
-$("side").addEventListener("click", (e) => { const li = e.target.closest("[data-sid]"); if (li) { openSession(li.dataset.sid); $("side").classList.remove("open"); } });
+$("side").addEventListener("click", async (e) => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    const s = S.sessions.find((x) => x.id === del.dataset.del);
+    if (!confirm(s?.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
+    try { await deleteSession(del.dataset.del); } catch (err) { toast(err.message); }
+    return;
+  }
+  const renProj = e.target.closest("[data-ren-proj]");
+  if (renProj) {
+    const p = renProj.dataset.renProj;
+    const name = prompt("Project name", projName(p));
+    if (name !== null) {
+      try { await api("/api/projects/rename", { method: "POST", body: { path: p, name } }); await loadSessions(); if (S.session) renderTop(); } catch (err) { toast(err.message); }
+    }
+    return;
+  }
+  const ren = e.target.closest("[data-ren]");
+  if (ren) {
+    const s = S.sessions.find((x) => x.id === ren.dataset.ren);
+    const title = prompt(s?.kind === "agent" ? "Rename this agent task" : "Rename this chat", s?.title || "");
+    if (title !== null && title.trim()) {
+      try { await api(`/api/sessions/${ren.dataset.ren}`, { method: "PATCH", body: { title: title.trim() } }); await loadSessions(); if (S.current === ren.dataset.ren) openSession(S.current); } catch (err) { toast(err.message); }
+    }
+    return;
+  }
+  const add = e.target.closest("[data-add-chat]");
+  if (add) {
+    try {
+      const s = await api("/api/sessions", { method: "POST", body: { project: add.dataset.addChat } });
+      await loadSessions(); openSession(s.id);
+      toast("New chat in this project — the model reads its files, and can't change them.", 4000);
+    } catch (err) { toast(err.message); }
+    return;
+  }
+  const head = e.target.closest("[data-proj]");
+  if (head) {
+    const p = head.dataset.proj, c = collapsedProjs();
+    c.has(p) ? c.delete(p) : c.add(p);
+    try { localStorage.setItem("promptaro:projCollapsed", JSON.stringify([...c])); } catch { }
+    renderSide();
+    return;
+  }
+  const li = e.target.closest("[data-sid]"); if (li) { openSession(li.dataset.sid); $("side").classList.remove("open"); }
+});
+async function deleteSession(sid) {
+  await api(`/api/sessions/${sid}`, { method: "DELETE" });
+  if (sid === S.current) closeView();
+  loadSessions();
+}
+function closeView() {
+  S.current = null; S.session = null; S.running = false;
+  $("title").textContent = "Promptaro"; inputHint(); renderSide(); renderTop(); closeReview(); welcome();
+}
 $("menu").onclick = () => $("side").classList.toggle("open");
 
 /* ---------------- models ---------------- */
 async function loadModels() {
   try { S.models = await api("/api/models"); } catch { S.models = []; }
   S.tiers = Object.fromEntries(S.models.map((m) => [m.id, m.tier]));
-  const opts = `<option value="">Auto (router decides)</option>` + S.models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.subscription ? "" : m.free ? " · free" : m.via ? " · " + esc(m.via) : ""}</option>`).join("");
+  const opts = `<option value="">Auto (router decides)</option>` + S.models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.subscription ? "" : m.free ? " · free" : m.cost_note ? " · " + esc(m.cost_note) : m.via ? " · " + esc(m.via) : ""}</option>`).join("");
   $("modelPick").innerHTML = opts; $("agentModel").innerHTML = opts;
   const on = S.models.length > 0;
   $("connDot").classList.toggle("on", on);
@@ -114,6 +186,7 @@ async function welcome() {
     <div class="starters">
       <button class="starter" data-start="agent"><b>Start an agent on a repo</b><span>It reads the code, makes the change, runs your tests, and waits for your review.</span></button>
       <button class="starter" data-start="chat"><b>Ask a question</b><span>Every answer shows which model answered and why.</span></button>
+      <button class="starter" data-start="projchat"><b>Chat about a project</b><span>Bind a folder — the model reads your code to answer, and can't change it.</span></button>
     </div>
     <div class="suggest">${SUGGEST.map((q) => `<button class="chip" data-suggest="${esc(q)}">${esc(q)}</button>`).join("")}</div>
     <div class="legend" aria-label="Track colors"><span><i style="background:var(--t1)"></i>Small or free model</span><span><i style="background:var(--t2)"></i>Medium model</span><span><i style="background:var(--t3)"></i>Large model or your subscription</span></div>
@@ -155,6 +228,7 @@ $("thread").addEventListener("click", async (e) => {
   if (sg) { input.value = sg.dataset.suggest; input.focus(); input.dispatchEvent(new Event("input")); return; }
   const st = e.target.closest("[data-start]"); if (!st) return;
   if (st.dataset.start === "agent") openAgentDialog();
+  if (st.dataset.start === "projchat") openProjChat();
   if (st.dataset.start === "chat") $("input").focus();
   if (st.dataset.start === "connect") openConnections();
   if (st.dataset.start === "free") openConnections().then(() => $("freeHead")?.scrollIntoView({ block: "start" }));
@@ -229,7 +303,7 @@ function renderEvent(ev) {
           <span class="model">${esc(d.name || d.model)}</span>
           ${d.offline ? "" : d.free ? '<span class="tag free">Free</span>' : '<span class="tag paid">Paid</span>'}
           <span>${d.cached ? "reused an earlier answer" : `${fmtTokens(tokens)} tokens`}${tokens && !d.cached ? ` <span class="sub">(${fmtTokens(d.tokens_in || 0)} in · ${fmtTokens(d.tokens_out || 0)} out)</span>` : ""}</span>
-          ${!d.free && +d.cost > 0 ? `<span>${money(+d.cost)}</span>` : ""}
+          ${!d.free && +d.cost > 0 ? `<span>${money(+d.cost)}</span>` : d.cost_note ? `<span class="sub">${esc(d.cost_note)}</span>` : ""}
           ${d.retry ? '<span class="auto">Stronger model</span>' : S.session && S.session.model ? "" : '<span class="auto">Auto-selected</span>'}
           ${d.passed === false && !d.offline ? '<span class="flag-bad">did not pass checks</span>' : ""}
         </div>
@@ -334,7 +408,8 @@ async function openSession(sid) {
   r.events.forEach(renderEvent);
   if (S.running) showThinking();
   $("modelPick").value = r.session.model || ""; $("preferPick").value = r.session.prefer || "balanced";
-  $("input").placeholder = r.session.kind === "agent" ? "Tell the agent something (it reads it at its next step)" : "Message";
+  $("input").placeholder = r.session.kind === "agent" ? "Tell the agent something (it reads it at its next step)"
+    : r.session.project ? "Ask about this project — the model can read its files" : "Message";
   renderTop(); updateComposer(); scrollDown();
   if (r.session.kind !== "agent") closeReview();
   else if (!$("review").classList.contains("hidden")) openReview();
@@ -342,18 +417,22 @@ async function openSession(sid) {
 function renderTop() {
   const s = S.session; if (!s) { $("topTools").innerHTML = ""; return; }
   $("topTools").innerHTML = (s.kind === "agent" ? `<span>${esc(statusText(s.status))}</span><button class="btn" data-top="review">Changes</button>` : "") +
+    (s.project ? `<span title="${esc(s.project)}">📁 ${esc(projName(s.project))}</span>` : "") +
     ((s.tokens_in || s.tokens_out) ? `<span title="Tokens used in this conversation (in · out)">${fmtTokens((s.tokens_in || 0) + (s.tokens_out || 0))} tokens</span>` : "") +
     (s.cost ? `<span title="Total spent in this conversation">$${(+s.cost).toFixed(4)}</span>` : (s.tokens_in ? `<span>$0</span>` : "")) +
+    `<button class="btn ghost icon" data-top="export" title="Download this conversation as Markdown" aria-label="Download conversation">⤓</button>` +
+    `<button class="btn ghost icon" data-top="close" title="Close this view (keeps the conversation in the list)" aria-label="Close view">✕</button>` +
     `<button class="btn ghost icon" data-top="delete" title="Delete conversation" aria-label="Delete conversation">🗑</button>`;
 }
 $("topTools").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-top]"); if (!b) return;
+  const s = S.session;
   if (b.dataset.top === "review") openReview();
+  if (b.dataset.top === "export") location.href = `/api/sessions/${s.id}/export`;
+  if (b.dataset.top === "close") closeView();
   if (b.dataset.top === "delete") {
-    const s = S.session;
     if (!confirm(s.kind === "agent" ? "Delete this agent task and throw away its unmerged changes?" : "Delete this chat?")) return;
-    await api(`/api/sessions/${s.id}`, { method: "DELETE" });
-    S.current = null; S.session = null; $("title").textContent = "Promptaro"; renderTop(); closeReview(); welcome(); loadSessions();
+    try { await deleteSession(s.id); } catch (err) { toast(err.message); }
   }
 });
 function updateComposer() { $("stopBtn").classList.toggle("hidden", !(S.session?.kind === "agent" && S.running)); }
@@ -383,7 +462,7 @@ async function send() {
 $("stopBtn").onclick = () => S.current && api(`/api/sessions/${S.current}/stop`, { method: "POST" });
 $("modelPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { model: $("modelPick").value } });
 $("preferPick").onchange = () => S.current && api(`/api/sessions/${S.current}`, { method: "PATCH", body: { prefer: $("preferPick").value } });
-$("newChat").onclick = () => { S.current = null; S.session = null; $("title").textContent = "New chat"; inputHint(); renderSide(); renderTop(); closeReview(); welcome(); input.focus(); $("side").classList.remove("open"); };
+$("newChat").onclick = () => { closeView(); $("title").textContent = "New chat"; input.focus(); $("side").classList.remove("open"); };
 
 /* ---------------- live events ---------------- */
 let streamKey = "";
@@ -464,14 +543,17 @@ $("manualRun").onclick = async () => {
 };
 $("manualCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") $("manualRun").click(); });
 
-/* ---------------- new agent ---------------- */
-async function openAgentDialog() {
-  $("agentErr").textContent = ""; $("agentModel").value = $("modelPick").value;
+/* ---------------- new agent / project chat ---------------- */
+async function fillProjects(input, box) {
   try {
     const ps = await api("/api/projects");
-    $("recentProjects").innerHTML = ps.map((p) => `<button type="button" data-proj="${esc(p)}" title="${esc(p)}">${esc(p.split("/").pop())}</button>`).join("");
-    if (!$("projPath").value && ps[0]) $("projPath").value = ps[0];
+    box.innerHTML = ps.map((p) => `<button type="button" data-proj="${esc(p)}" title="${esc(p)}">${esc(p.split(/[\\/]/).filter(Boolean).pop() || p)}</button>`).join("");
+    if (!input.value && ps[0]) input.value = ps[0];
   } catch {}
+}
+async function openAgentDialog() {
+  $("agentErr").textContent = ""; $("agentModel").value = $("modelPick").value;
+  await fillProjects($("projPath"), $("recentProjects"));
   $("agentDlg").showModal(); $("taskText").focus();
 }
 $("newAgent").onclick = () => { openAgentDialog(); $("side").classList.remove("open"); };
@@ -499,6 +581,31 @@ $("agentForm").addEventListener("submit", async (e) => {
   } finally { $("agentStart").disabled = false; }
 });
 
+/* ---------------- project chat ---------------- */
+async function openProjChat() {
+  $("projChatErr").textContent = "";
+  await fillProjects($("chatProjPath"), $("chatRecentProjects"));
+  $("projChatDlg").showModal(); $("chatProjPath").focus();
+}
+$("newProjChat").onclick = () => { openProjChat(); $("side").classList.remove("open"); };
+$("chatRecentProjects").addEventListener("click", (e) => { const b = e.target.closest("[data-proj]"); if (b) $("chatProjPath").value = b.dataset.proj; });
+$("projChatCancel").onclick = () => $("projChatDlg").close();
+$("pickChatFolder").onclick = async () => {
+  try { const r = await api("/api/pick-folder", { method: "POST" }); if (r.path) $("chatProjPath").value = r.path; }
+  catch { $("chatProjPath").focus(); toast("Type or paste the folder path"); }
+};
+$("projChatForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const p = $("chatProjPath").value.trim();
+  if (!p) { $("projChatErr").textContent = "Choose a project folder."; return; }
+  try {
+    const s = await api("/api/sessions", { method: "POST", body: { project: p } });
+    $("projChatDlg").close(); $("chatProjPath").value = "";
+    await loadSessions(); await openSession(s.id);
+    toast("Ask anything — the model reads this project to answer, and can't change it.", 5000);
+  } catch (err) { $("projChatErr").textContent = err.message; }
+});
+
 /* ---------------- connections ---------------- */
 async function openConnections() {
   const s = await api("/connect/status");
@@ -510,6 +617,16 @@ async function openConnections() {
     const sub = v === "openrouter" ? "One sign-in for Claude, GPT, Gemini and more" : "Optional direct connection, no OpenRouter fee";
     return `<div class="conn-row"><span class="dot ${c.connected ? "on" : ""}"></span><span class="grow"><strong>${esc(c.label)}</strong><br><span class="sub">${sub}</span></span>${right}</div>`;
   });
+  const media = Object.entries(s.media_providers || {});
+  if (media.length) {
+    rows.push(`<div class="free-head"><h3>Image &amp; video keys</h3><span class="fine">Free accounts used by Studio → Generate. Pollinations works with no key at all.</span></div>`);
+    rows.push(media.map(([v, c]) => {
+      const right = c.connected ? `<span class="sub">Connected</span><button class="btn" data-off="${v}">Disconnect</button>`
+        : `<a class="btn" href="${esc(c.get_key_url)}" target="_blank" rel="noopener">Get free key</a><input type="password" autocomplete="off" placeholder="Paste key" data-key="${v}"><button class="btn" data-on="${v}">Connect</button>`;
+      const extra = c.needs_account_id ? `<br><input autocomplete="off" spellcheck="false" placeholder="Account ID (dash.cloudflare.com → right side)" data-acct="${v}" style="margin-top:6px">` : "";
+      return `<div class="conn-row"><span class="dot ${c.connected ? "on" : ""}"></span><span class="grow"><strong>${esc(c.label)}</strong><br><span class="sub">Free tier — powers image${v === "huggingface" ? " and video" : ""} generation</span>${extra}</span>${right}</div>`;
+    }).join(""));
+  }
   let subs = { claude_code: {}, codex: {} };
   try { subs = await api("/api/subscriptions"); } catch {}
   const planRow = (x, title, tool, how, url) => `<div class="conn-row"><span class="dot ${x.subscription ? "on" : ""}"></span><span class="grow"><strong>${title}</strong><br><span class="sub">${
@@ -521,6 +638,17 @@ async function openConnections() {
   rows.push(planRow(subs.codex || {}, "ChatGPT subscription (Codex CLI)", "Codex CLI", "codex login", "https://developers.openai.com/codex/cli"));
   try { rows.push(freeRows(await api("/api/free"))); } catch {}
   rows.push(`<div class="conn-row"><span class="dot ${s.ollama.length ? "on" : ""}"></span><span class="grow"><strong>Ollama (local models)</strong><br><span class="sub">${s.ollama.length ? esc(s.ollama.join(", ")) : "Start Ollama and it's picked up automatically"}</span></span></div>`);
+  const eps = s.endpoints || [];
+  rows.push(`<div class="free-head"><h3>Custom endpoints</h3><span class="fine">Any OpenAI-compatible API — Ollama, LM Studio, vLLM, or a company proxy. Local servers need no key.</span></div>`);
+  rows.push(eps.map((e) => `<div class="conn-row"><span class="dot on"></span><span class="grow"><strong>${esc(e.label)}</strong> ${e.private ? '<span class="badge private" title="Treated as private: code may use it">Private — safe for code</span>' : '<span class="badge trains" title="Treated like an outside service: chats only">Outside service</span>'}<br><span class="sub">${esc(e.base_url)} · ${esc((e.models || []).join(", "))}${e.has_key ? " · key saved" : ""}</span></span><button class="btn" data-rmep="${esc(e.id)}">Remove</button></div>`).join(""));
+  rows.push(`<div class="ep-form">
+    <input id="epLabel" placeholder="Name — e.g. My Ollama" autocomplete="off">
+    <input id="epBase" placeholder="Base URL — http://localhost:11434/v1" autocomplete="off" spellcheck="false">
+    <input id="epModels" placeholder="Models (comma-separated, blank = auto-detect)" autocomplete="off" spellcheck="false">
+    <input id="epKey" type="password" autocomplete="off" placeholder="API key (only if the endpoint needs one)">
+    <label class="fine"><input type="checkbox" id="epPrivate"> Private — a local or company endpoint that can't train on prompts, so code may use it</label>
+    <button class="btn primary" id="epAdd">Add endpoint</button>
+  </div>`);
   const fm = (s.settings || {}).free_models || "chat";
   const q = s.free_quota;
   const quota = !q ? "" : q.available ? `<br><span class="sub quota">Free requests left today: <b>${q.remaining ?? "checking…"}</b>${q.limit ? ` of ${q.limit}` : ""}</span>`
@@ -583,10 +711,32 @@ $("openConnections").onclick = () => { connMsg(); openConnections(); };
 $("connClose").onclick = async () => { $("connDlg").close(); await loadModels(); if (!S.current) welcome(); };
 $("connBody").addEventListener("click", async (e) => {
   if (e.target.dataset.recheck) { e.target.textContent = "Checking…"; await api("/api/subscriptions?refresh=1"); await loadModels(); return openConnections(); }
+  if (e.target.id === "epAdd") {
+    const body = { label: $("epLabel").value.trim(), base_url: $("epBase").value.trim(),
+                   models: $("epModels").value.trim(), key: $("epKey").value.trim() || null,
+                   private: $("epPrivate").checked };
+    e.target.disabled = true; connMsg();
+    try {
+      const r = await api("/connect/endpoints", { method: "POST", body });
+      connMsg("ok", `${r.endpoint.label} added — ${r.models} model(s) ready.`);
+      await loadModels(); await openConnections();
+      connMsg("ok", `${r.endpoint.label} added — ${r.models} model(s) ready.`);
+    } catch (err) { connMsg("bad", err.message); }
+    finally { e.target.disabled = false; }
+    return;
+  }
+  const rmep = e.target.dataset.rmep;
+  if (rmep) {
+    try { await api(`/connect/endpoints/${rmep}`, { method: "DELETE" }); connMsg("ok", "Endpoint removed."); }
+    catch (err) { connMsg("bad", err.message); }
+    await loadModels(); openConnections();
+    return;
+  }
   const on = e.target.dataset.on, off = e.target.dataset.off;
   if (on) {
     const inp = $("connBody").querySelector(`[data-key="${on}"]`); const k = inp.value.trim(); inp.value = "";
-    return connectKey(`/connect/${on}`, k, e.target);
+    const acct = $("connBody").querySelector(`[data-acct="${on}"]`);
+    return connectKey(`/connect/${on}`, k, e.target, acct ? acct.value.trim() : "");
   }
   if (off) {
     try { await api(`/connect/${off}`, { method: "DELETE" }); connMsg("ok", "Disconnected and removed from storage."); }
@@ -724,6 +874,87 @@ $("restartBtn").onclick = async () => {
 };
 setInterval(checkUpdate, 30000);
 
+/* ---------------- studio (generate + file tools) ---------------- */
+const CONV_FMTS = {
+  "convert": [],
+  "make-pdf": [],
+  "merge-pdf": [],
+};
+function fillFormats() {
+  const a = $("convAction").value, c = S.toolCaps?.convert || {};
+  const groups = a === "convert"
+    ? [["Audio", c.audio_formats], ["Video", c.video_formats], ["Image", c.image_formats], ["Document", c.doc_formats]]
+    : [];
+  $("convFmt").innerHTML = groups.map(([g, fs]) => fs && fs.length ? `<optgroup label="${g}">${fs.map((f) => `<option>${f}</option>`).join("")}</optgroup>` : "").join("");
+  $("convFmt").disabled = a !== "convert";
+  $("convName").style.display = a === "convert" ? "none" : "";
+}
+async function openStudio() {
+  $("convErr").textContent = "";
+  try {
+    S.toolCaps = await api("/api/tools/capabilities");
+    const c = S.toolCaps.convert, media = S.toolCaps.media || [];
+    const usable = media.filter((m) => m.connected && m.enabled !== false);
+    const gated = media.filter((m) => m.connected && m.enabled === false).map((m) => m.label);
+    const video = usable.some((m) => m.kinds.includes("video"));
+    $("genPaid").checked = !!S.toolCaps.paid_media;
+    $("studioCaps").textContent =
+      `Images: ${usable.length ? usable.map((m) => m.label).join(", ") : "no keys yet — Pollinations works without one"}` +
+      `${gated.length ? ` (off until allowed: ${gated.join(", ")})` : ""}. ` +
+      `Video: ${video ? "Hugging Face (free)" : "needs a free Hugging Face token (Connections → Image & video keys)"}. ` +
+      `Convert: ${c.ffmpeg ? "audio+video ✓" : "audio/video needs ffmpeg"}${c.pandoc ? ", pandoc ✓" : ""}.`;
+  } catch { $("studioCaps").textContent = ""; }
+  fillFormats();
+  if (!$("studioDlg").open) $("studioDlg").showModal();
+}
+$("studioBtn").onclick = openStudio;
+$("studioClose").onclick = () => $("studioDlg").close();
+$("convAction").onchange = fillFormats;
+$("pickFiles").onclick = async () => {
+  try {
+    const r = await api("/api/tools/pick-files", { method: "POST" });
+    if (r.paths && r.paths.length) $("convPaths").value = [$("convPaths").value, ...r.paths].filter(Boolean).join("\n");
+  } catch (e) { toast(e.message); }
+};
+function convInputPaths() {
+  return $("convPaths").value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+}
+$("genGo").onclick = async () => {
+  const prompt = $("genPrompt").value.trim();
+  if (!prompt) return $("genPrompt").focus();
+  const b = $("genGo"); b.disabled = true; b.textContent = "Generating…";
+  $("genStatus").textContent = "trying the free providers — the first one that answers wins";
+  $("genResult").innerHTML = "";
+  try {
+    const r = await api("/api/tools/generate", { method: "POST", body: { kind: $("genKind").value, prompt, size: $("genSize").value } });
+    const tag = r.kind === "video" || r.file.endsWith(".mp4") || r.file.endsWith(".webm")
+      ? `<video src="${r.url}" controls autoplay muted loop style="max-width:100%;border-radius:8px"></video>`
+      : `<img src="${r.url}" alt="generated" style="max-width:100%;border-radius:8px">`;
+    $("genResult").innerHTML = `${tag}<p class="fine">made by ${esc(r.provider)} · <a href="${r.url}" download>download</a> · <a href="#" data-reveal="${esc(r.file)}">show in folder</a></p>`;
+    $("genStatus").textContent = "";
+  } catch (e) { $("genStatus").textContent = ""; $("genResult").innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
+  finally { b.disabled = false; b.textContent = "Generate"; }
+};
+$("genPaid").onchange = async (e) => {
+  try { await api("/connect/settings", { method: "POST", body: { paid_media: e.target.checked } }); }
+  catch (x) { e.target.checked = !e.target.checked; toast(x.message); }
+};
+$("convGo").onclick = async () => {
+  const inputs = convInputPaths();
+  if (!inputs.length) { $("convErr").textContent = "Add at least one file path."; return; }
+  const b = $("convGo"); b.disabled = true; $("convErr").textContent = ""; $("convResult").innerHTML = "";
+  try {
+    const r = await api("/api/tools/convert", { method: "POST", body: { action: $("convAction").value, inputs, format: $("convFmt").value, name: $("convName").value.trim() } });
+    $("convResult").innerHTML = r.outputs.map((o) =>
+      `<p class="fine">✓ <b>${esc(o.name)}</b> (${(o.bytes / 1024).toFixed(0)} KB) — <a href="${o.url}" download>download</a> · <a href="#" data-reveal="${esc(o.name)}">show in folder</a></p>`).join("");
+  } catch (e) { $("convErr").textContent = e.message; }
+  finally { b.disabled = false; }
+};
+$("studioDlg").addEventListener("click", async (e) => {
+  const rv = e.target.closest("[data-reveal]");
+  if (rv) { e.preventDefault(); try { await api("/api/tools/reveal", { method: "POST", body: { path: rv.dataset.reveal } }); } catch (x) { toast(x.message); } }
+});
+
 /* ---------------- boot ---------------- */
 (async function boot() {
   const q = new URLSearchParams(location.search);
@@ -731,5 +962,26 @@ setInterval(checkUpdate, 30000);
   if (q.get("error")) toast(q.get("error"), 6000);
   if (q.toString()) history.replaceState(null, "", "/");
   applyDetailsPref();
+  // Terms of Use gate — the app stays inert until accepted (server enforces too).
+  async function showTerms(review) {
+    const lg = await api("/api/legal");
+    $("legalTerms").textContent = lg.terms;
+    $("legalAccept").classList.toggle("hidden", review);
+    $("legalClose").classList.toggle("hidden", !review);
+    $("legalDlg").showModal();
+    if (review) return;
+    await new Promise((resolve) => {
+      $("legalAccept").onclick = async () => {
+        $("legalAccept").disabled = true;
+        try {
+          await api("/api/legal/accept", { method: "POST", body: { version: lg.version } });
+          $("legalDlg").close(); resolve();
+        } catch (x) { $("legalAccept").disabled = false; toast(x.message); }
+      };
+    });
+  }
+  $("termsBtn").onclick = () => showTerms(true);
+  $("legalClose").onclick = () => $("legalDlg").close();
+  if (!(await api("/api/legal")).accepted) await showTerms(false);
   await loadModels(); await loadSessions(); welcome(); connectStream(); checkUpdate(); loadSavings();
 })();
