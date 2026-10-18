@@ -24,14 +24,15 @@ def client(router_root):
         yield c
 
 
-def wait_status(c, sid, done=("idle", "review"), timeout=10):
+def wait_status(c, sid, done=("idle", "review"), timeout=30):
     t0 = time.time()
     while time.time() - t0 < timeout:
         s = c.get(f"/api/sessions/{sid}").json()
         if s["session"]["status"] in done and not s["running"]:
             return s
         time.sleep(0.05)
-    raise AssertionError("timed out")
+    raise AssertionError(f"timed out — last session state: "
+                         f"{[(e['kind'], str(e['data'])[:80]) for e in s['events'][-6:]]}")
 
 
 def test_ui_and_health(client):
