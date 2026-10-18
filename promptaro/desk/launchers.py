@@ -32,8 +32,15 @@ if ! curl -fsS "$URL/healthz" >/dev/null 2>&1; then
   PROMPTARO_NO_WINDOW=1 TILLWRIGHT_NO_WINDOW=1 "{src}/launch.sh" --background >/dev/null 2>&1 || true
   for i in $(seq 1 120); do curl -fsS "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 fi
-TOKEN=$(curl -fsS -X POST -H "x-promptaro: 1" "$URL/api/gateway/token" | sed -E 's/.*"token":"([^"]+)".*/\\1/')
-if [ -z "$TOKEN" ]; then echo "Promptaro isn't running. Open it and try again." >&2; exit 1; fi
+RESP=$(curl -sS -X POST -H "x-promptaro: 1" "$URL/api/gateway/token" 2>/dev/null)
+TOKEN=$(printf '%s' "$RESP" | sed -nE 's/.*"token":"([^"]+)".*/\\1/p')
+if [ -z "$TOKEN" ]; then
+  case "$RESP" in
+    *terms_required*) echo "Open Promptaro and accept the Terms of Use first." >&2 ;;
+    *) echo "Promptaro isn't running. Open it and try again." >&2 ;;
+  esac
+  exit 1
+fi
 """
 
 POSIX = {
@@ -55,8 +62,11 @@ EOF
 """),
 }
 
-_WIN_TOKEN = ('for /f "delims=" %%t in (\'powershell -NoProfile -Command "(Invoke-RestMethod -Method Post '
-              '-Headers @{{\'x-promptaro\'=\'1\'}} http://127.0.0.1:{port}/api/gateway/token).token"\') do set PRO_TOKEN=%%t\r\n'
+_WIN_TOKEN = ('for /f "delims=" %%t in (\'powershell -NoProfile -Command "try {{ (Invoke-RestMethod -Method Post '
+              '-Headers @{{\'x-promptaro\'=\'1\'}} http://127.0.0.1:{port}/api/gateway/token).token }} '
+              'catch {{ if ($_.ErrorDetails.Message -match \'terms_required\') {{ \'TERMS_REQUIRED\' }} }}"\') '
+              'do set PRO_TOKEN=%%t\r\n'
+              'if "%PRO_TOKEN%"=="TERMS_REQUIRED" (echo Open Promptaro and accept the Terms of Use first. & exit /b 1)\r\n'
               'if "%PRO_TOKEN%"=="" (echo Promptaro isn\'t running. Open it and try again. & exit /b 1)\r\n')
 WINDOWS = {
     "promptaro-claude.cmd": ("set ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\r\nset ANTHROPIC_AUTH_TOKEN=%PRO_TOKEN%\r\n"

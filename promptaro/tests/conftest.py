@@ -94,6 +94,8 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}")
     for k in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(k, raising=False)
+    from desk import legal
+    legal.accept()                    # tests run as a user who already accepted the terms
     return home
 
 
@@ -137,6 +139,25 @@ def desk_factory(router_root, tmp_path):
                               "offline": provider})
         return Desk(r, Store(tmp_path / "d.db"))
     return make
+
+
+def drain_catalog_refresh(c):
+    """Wait out the app's startup registry swap (lifespan -> refresh_catalog -> reload).
+
+    Tests that inject ModelSpecs into router.registry race that swap: if reload lands
+    after the injection, the chat runs on the fresh registry and the added model is gone.
+    The swap is correct in production; here we just settle it before tests begin."""
+    t = getattr(c.app.state, "catalog_refresh", None)
+    if t is None or t.done():
+        return
+
+    async def _wait():
+        try:
+            await asyncio.wait_for(t, 10)
+        except Exception:
+            pass
+
+    c.portal.call(_wait)
 
 
 def wait_task(desk, sid, timeout=30):

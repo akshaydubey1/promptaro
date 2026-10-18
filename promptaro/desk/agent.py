@@ -31,6 +31,7 @@ from router.providers import ProviderError
 from router.selector import route
 
 from .tools import TOOL_DOCS, ToolError, Workspace, clip, needs_approval, redact
+from .workers import engine_of
 
 if TYPE_CHECKING:
     from .desk import Desk
@@ -134,11 +135,14 @@ class AgentRun:
         self.store = desk.store
         s = self.store.get(sid)
         self.s = s
-        self.ws = Workspace(s["worktree"])
+        self.chat = s["kind"] == "chat"           # project-bound chat: read-only, answers as chat turns
+        self.ws = Workspace(s["worktree"] or s["project"])
         self.state = s["state"] or {}
         self.messages: list[dict] = self.state.get("messages", [])
         self.level = int(self.state.get("level", 0))
         self.max_cost = float(self.state.get("max_cost", 2.0))
+        self.last_model: dict = {}                # info about the model behind the last answer
+        self.run_cost = self.run_tin = self.run_tout = 0
 
     def _save(self) -> None:
         self.state.update(messages=self.messages, level=self.level)
@@ -150,7 +154,7 @@ class AgentRun:
         prof.task_type = "coding"
         if planning:
             prof.complexity = min(1.0, prof.complexity + 0.2)
-        force = self.s.get("model") if self.s.get("model") not in ("", None, "claude-code", "codex") else None
+        force = m if (m := self.s.get("model")) and not engine_of(m)[0] else None
         from router.catalog import get_settings
         mode = get_settings().get("free_models", "chat")
         # Private code: free models only from providers that don't train on prompts, unless allowed.
@@ -178,6 +182,8 @@ class AgentRun:
 
     async def _tool(self, action: str, args: dict):
         ws = self.ws
+        if self.chat and action in ("write_file", "edit_file", "run"):
+            raise ToolError("This is a read-only chat: list_files, read_file and search only.")
         if action == "list_files":
             return await ws.list_files(args.get("path", "."), args.get("depth", 2))
         if action == "read_file":
@@ -200,14 +206,30 @@ class AgentRun:
             return await ws.run(cmd, args.get("timeout", 120))
         raise ToolError(f"unknown action {action}")
 
+    def _system(self, listing: str) -> str:
+        return system_prompt(self.ws, listing, project_hints(self.ws.root))
+
+    def _done(self, summary: str, tests: str = "not_run") -> None:
+        """End of the run: a finish card for agents, a normal answer for project chats."""
+        if not self.chat:
+            self.store.emit(self.sid, "finish", {"summary": summary[:6000], "tests": tests})
+            return
+        self.store.emit(self.sid, "assistant", {
+            "text": summary[:20000], "model": self.last_model.get("id", ""),
+            "name": self.last_model.get("name") or self.last_model.get("id", ""),
+            "free": self.last_model.get("free", False), "via": self.last_model.get("via", ""),
+            "cost": round(self.run_cost, 6), "tokens_in": self.run_tin, "tokens_out": self.run_tout,
+            "passed": True, "cached": False, "calls": 1, "task_type": "chat", "why": "",
+            "explain": None, "offline": False})
+
     async def run(self, user_text: str) -> None:
         sid, store = self.sid, self.store
         task = self.state.get("task") or user_text
         self.state.setdefault("task", task)
         if not self.messages:
             listing = (await self.ws.list_files(".", 1)).output
-            self.state["system"] = system_prompt(self.ws, listing, project_hints(self.ws.root))
-            self.messages.append({"role": "user", "content": f"Task: {user_text}"})
+            self.state["system"] = self._system(listing)
+            self.messages.append({"role": "user", "content": user_text if self.chat else f"Task: {user_text}"})
         else:
             self.messages.append({"role": "user", "content": f"User follow-up: {user_text}"})
         store.update(sid, status="running")
@@ -220,13 +242,16 @@ class AgentRun:
                 self.messages.append({"role": "user", "content": f"User message while you work: {extra}"})
                 store.emit(sid, "note", {"text": "Delivered your message to the agent."})
             if (store.get(sid) or {}).get("cost", 0) >= self.max_cost:
-                store.emit(sid, "finish", {"summary": f"Stopped: reached this task's ${self.max_cost:.2f} budget. "
-                                                      "Raise it and send 'continue' to keep going.", "tests": "not_run"})
+                self._done(f"Stopped: reached this {'chat' if self.chat else 'task'}'s ${self.max_cost:.2f} "
+                           "budget. " + ("Start a new chat to keep going." if self.chat else
+                                        "Raise it and send 'continue' to keep going."))
                 break
 
             planning = step == 0 and len(self.messages) <= 2
             spec, prof, decision, ladder_len = self._pick(task, planning)
             if spec.id != last_model:
+                self.last_model = {"id": spec.id, "name": spec.extra.get("name", spec.id),
+                                   "via": spec.extra.get("via", ""), "free": bool(spec.extra.get("free"))}
                 why = decision.why()
                 if self.level:
                     why["because"] = "the previous model kept having problems, so this step moved up a level."
@@ -255,8 +280,7 @@ class AgentRun:
                         self.level += 1
                         store.emit(sid, "note", {"text": f"{spec.id}: {why} Trying the next option."})
                         continue
-                    store.emit(sid, "finish", {"summary": f"Stopped: {why} Connect a paid provider or wait for "
-                                                          "the free allowance to reset.", "tests": "not_run"})
+                    self._done(f"Stopped: {why} Connect a paid provider or wait for the free allowance to reset.")
                     break
             t0 = time.perf_counter()
             try:
@@ -279,8 +303,7 @@ class AgentRun:
                 errors += 1
                 store.emit(sid, "error", {"text": f"{spec.id}: {redact(e)[:300]}"})
                 if errors >= 3:
-                    store.emit(sid, "finish", {"summary": "Stopped: model calls keep failing. Check Connections.",
-                                               "tests": "not_run"})
+                    self._done("Stopped: model calls keep failing. Check Connections.")
                     break
                 if self.level < ladder_len - 1:
                     self.level += 1
@@ -289,6 +312,9 @@ class AgentRun:
 
             cost = spec.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.add_usage(sid, cost, comp.tokens_in, comp.tokens_out)
+            self.run_cost += cost
+            self.run_tin += comp.tokens_in
+            self.run_tout += comp.tokens_out
             r.store.add_spend(cost)
             top = strongest.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)
             store.bump(spent=cost, saved=max(0.0, top - cost), tokens=comp.tokens_in + comp.tokens_out, agent_steps=1)
@@ -317,8 +343,7 @@ class AgentRun:
             if action.get("thought"):
                 store.emit(sid, "thought", {"text": str(action["thought"])[:2000]})
             if name == "finish":
-                store.emit(sid, "finish", {"summary": str(args.get("summary", ""))[:6000],
-                                           "tests": args.get("tests", "not_run")})
+                self._done(str(args.get("summary", "")), args.get("tests", "not_run"))
                 break
 
             store.emit(sid, "tool_call", {"action": name, "args": _ui_args(name, args)})
@@ -339,8 +364,39 @@ class AgentRun:
                 store.emit(sid, "escalate", {"reason": "three failed steps in a row"})
             self._save()
         else:
-            store.emit(sid, "finish", {"summary": f"Paused after {MAX_STEPS} steps. Send 'continue' to keep going.",
-                                       "tests": "not_run"})
+            self._done(f"Paused after {MAX_STEPS} steps. Send 'continue' to keep going.")
 
         self._save()
-        store.update(sid, status="review")
+        store.update(sid, status="idle" if self.chat else "review")
+
+
+CHAT_DOCS = """\
+Tools (reply with exactly ONE JSON object per turn, in a ```json block):
+
+{"thought": "<1-2 sentences>", "action": "<tool>", "args": {...}}
+
+- list_files   {"path": ".", "depth": 2}                 directory tree (respects .gitignore)
+- read_file    {"path": "...", "start": 1, "end": 400}   numbered lines
+- search       {"pattern": "regex", "path": "."}          matching lines with file:line
+- finish       {"summary": "..."}                          your full answer to the user (markdown is fine)
+
+This is read-only: look, never change or run anything. If a question needs no
+project context, answer straight away with finish.
+"""
+
+
+class ChatRun(AgentRun):
+    """A chat attached to a project folder. Same tool loop as an agent run, but the
+    model can only read — never write, edit or run — and the turn ends as a normal
+    chat answer instead of a review card. The real folder is used directly (no
+    worktree), because nothing it does can change it."""
+
+    def _system(self, listing: str) -> str:
+        return f"""You are a helpful assistant answering questions about the user's project at {self.ws.root}.
+Use the read tools to ground answers in the actual code instead of guessing; mention the files
+you relied on. If a question has nothing to do with the project, just answer it.
+
+{CHAT_DOCS}
+Top-level files:
+{listing}
+"""

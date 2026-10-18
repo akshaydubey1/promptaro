@@ -54,7 +54,20 @@ button,input,select,textarea{font:inherit;color:inherit}
 .item.active{background:var(--soft);font-weight:500}
 .item .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .sub{font-size:12px;color:var(--muted)}
+.item .x{opacity:0;border:0;background:transparent;color:var(--muted);cursor:pointer;padding:2px 5px;border-radius:5px;font-size:11px;flex:none}
+.item:hover .x,.item .x:focus-visible{opacity:1}
+.item .x:hover{background:var(--line);color:var(--bad)}
+.item .x.ren:hover{color:var(--ink)}
 .empty-note{font-size:13px;color:var(--muted);padding:4px 10px 8px}
+.proj-head{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--ink);margin:8px 10px 2px;padding:5px 6px;border-radius:7px;cursor:pointer;user-select:none;min-width:0}
+.proj-head:hover{background:var(--soft)}
+.proj-head .chev{font-size:10px;color:var(--muted);flex:none;transition:transform .12s}
+.proj-head .chev.shut{transform:rotate(-90deg)}
+.proj-head .count{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);flex:none}
+.proj-head .x.add,.proj-head .x.ren{opacity:0;border:0;background:transparent;color:var(--muted);cursor:pointer;padding:1px 5px;border-radius:5px;font-size:12px;flex:none}
+.proj-head:hover .x.add,.proj-head:hover .x.ren,.proj-head .x.add:focus-visible,.proj-head .x.ren:focus-visible{opacity:1}
+.proj-head .x.add:hover,.proj-head .x.ren:hover{background:var(--line);color:var(--ink)}
+.item .sub.tag{border:1px solid var(--line);border-radius:6px;padding:0 5px;font-size:10px}
 .status{width:8px;height:8px;border-radius:50%;flex:none;background:var(--line)}
 .status.running{background:var(--t2);animation:pulse 1.4s ease-in-out infinite}
 .status.waiting{background:var(--warn)}
@@ -206,6 +219,7 @@ dialog::backdrop{background:rgba(20,28,38,.35)}
 .conn-row .actions input{width:150px}
 .conn-row .sub{font-size:12.5px;color:var(--muted)}
 .conn-row a:not(.btn){color:var(--t2)}
+.ep-form{display:grid;gap:8px;padding:12px 0 4px}
 
 .update-bar{display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;
   padding:10px 22px;background:var(--warn-bg);border-bottom:1px solid color-mix(in srgb,var(--warn) 40%,transparent);font-size:14px}
@@ -268,6 +282,9 @@ dialog::backdrop{background:rgba(20,28,38,.35)}
 .side-link .glyph{font-family:var(--mono);font-size:12px;width:18px;color:var(--t2)}
 dialog .dlg.wide{max-width:none}
 dialog:has(.dlg.wide){width:min(720px,calc(100vw - 32px))}
+dialog:has(.dlg.legal){width:min(640px,calc(100vw - 32px))}
+.terms{font-family:inherit;font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;
+  max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:0}
 .tool-card{border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;margin:8px 0;display:grid;gap:8px}
 .tool-card h3{margin:0;font-size:14px;font-weight:600}
 .cmd{display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:6px 6px 6px 10px}

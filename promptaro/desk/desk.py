@@ -14,7 +14,7 @@ from . import gitops
 from .agent import AgentRun
 from .store import Store
 from .tools import redact
-from .workers import HARD_TASK, MODEL_IDS, RUNNERS, usable_engines
+from .workers import HARD_TASK, RUNNERS, engine_of, usable_engines
 
 CHAT_HISTORY_TURNS = 8
 
@@ -23,6 +23,15 @@ APP_HELP = """You are the assistant inside Promptaro, a desktop app by Akshay Du
 Promptaro, answer from these facts only (don't invent features):
 - New chat: ask anything; each answer shows the model used and its cost. The Model menu picks a specific model or
   Auto; Priority picks Balanced / Lowest cost / Fastest / Best quality.
+- New project chat: a chat bound to a folder; the model reads that project's files to answer but can never
+  change or run anything (read-only). A project must be a real subfolder — the home folder and whole drives are
+  refused, and files that hold credentials (.env, .ssh, keys) are never shown to the model.
+- The sidebar groups work by project: "Chats" holds general conversations and "Projects" lists each folder with
+  its own chats and agent tasks; click a project name to fold it, or its + button to start a chat inside it.
+- Hover any sidebar item for a pencil (rename the chat or task) and an x (delete); project headers have the same
+  pencil (rename the project) and a + (new chat in it).
+- Each conversation's header has buttons to download the whole conversation as Markdown, close the view, and
+  delete it. Chats also have a small x in the sidebar for quick deletion.
 - New agent task (button top-left): choose a project folder (must be a git repository; Promptaro offers
   "Set it up with git" if it isn't), describe the task, optionally set model, priority, command approvals and a
   dollar budget, then Start agent. The agent works on its own git branch in a separate copy of the project.
@@ -30,16 +39,25 @@ Promptaro, answer from these facts only (don't invent features):
 - When done: Review changes, then Merge into your branch, Open pull request (needs GitHub CLI `gh`), Commit to
   branch, Open in VS Code, or Discard.
 - Connections (bottom-left): Sign in with OpenRouter, or paste Anthropic/OpenAI/Google keys; Ollama is detected
-  automatically. Free providers (Groq, Cerebras, NVIDIA NIM, Mistral, Codestral, Cohere) each take one free key;
+  automatically. Custom endpoints adds any OpenAI-compatible API (Ollama, LM Studio, vLLM, a company proxy) by
+  base URL, with an optional key and a "Private" flag that lets code use it. Free providers (Groq, Cerebras,
+  NVIDIA NIM, Mistral, Codestral, Cohere) each take one free key;
   Promptaro tracks each one's limits and shows what's left today. Providers that may train on prompts are only used
   for chats unless the user allows them for code. A daily $ budget caps all paid spend.
+- Studio (sidebar): generates images and short videos on free tiers — Hugging Face, Together AI, Cloudflare
+  Workers AI, and Pollinations which needs no key — best-first, and converts files locally: make or
+  combine PDFs, convert images/audio/video/documents between formats. Nothing is uploaded anywhere.
+  Google AI Studio image models may bill a key once free quota runs out, so they only run when the user turns
+  on "Allow paid image models" in Studio.
 - Coding tools (sidebar): run Claude Code, Aider, Cline, Continue or OpenCode on these models through Promptaro's
   local gateway. `promptaro-claude` starts Claude Code through it; `promptaro-aider` starts Aider;
   `eval "$(promptaro-env)"` sets the variables for any other tool (the old `tw-*` commands still work).
   By default coding tools only use free models (never spend money).
 - Hard agent tasks run automatically on the user's Claude subscription (through Claude Code) or ChatGPT
   subscription (through Codex CLI) when that tool is installed and signed in — no per-use charge; the plan's usage
-  limits apply, and when one plan hits its limit the other plan or the regular models take over. Easy chats use free
+  limits apply, and when one plan hits its limit the other plan or the regular models take over. The Model menu
+  can also pick a specific model under a plan — Claude Opus/Sonnet/Haiku (latest aliases or pinned Opus 5 /
+  Sonnet 5) or Codex's GPT-5.x. A chat with a plan pick answers through that plan's tool, read-only. Easy chats use free
   models (OpenRouter allows 50 free requests a day, or 1000 after buying $10 of credit once); other work uses the
   cheapest paid model that can do it. Each answer shows the model, Free/Paid/Subscription, tokens used, and a
   "Why this model?" link with the options considered. Thumbs up/down teaches the router; thumbs down also offers
@@ -69,6 +87,15 @@ class Desk:
     # --------------------------------------------------------------- chat
     async def chat(self, sid: str, text: str, *, retry_of: int | None = None, exclude: tuple = ()) -> None:
         s = self.store.get(sid)
+        if engine_of(s.get("model") or "")[0]:           # a subscription pick: the plan's own tool answers
+            if await self._plan_chat(sid, text):
+                return
+            self.store.emit(sid, "note", {"text": "No signed-in plan could answer, so a regular "
+                                                  "model is answering instead."})
+        if s.get("project"):                            # a chat bound to a folder: read-only tools ground it
+            from .agent import ChatRun
+            await ChatRun(self, sid).run(text)
+            return
         past = [e for e in self.store.events(sid) if e["kind"] in ("user", "assistant")]
         if retry_of is not None:                         # history up to the question being retried
             past = [e for e in past if e["seq"] < retry_of]
@@ -76,7 +103,7 @@ class Desk:
         ctx = "\n\n".join(f"{'User' if e['kind'] == 'user' else 'Assistant'}: {e['data'].get('text', '')}"
                           for e in past[:-1])  # last one is the message being answered
         self.store.update(sid, status="running")
-        forced = s.get("model") if s.get("model") not in ("", None, *MODEL_IDS) else None
+        forced = m if (m := s.get("model")) and not engine_of(m)[0] else None
         prefer = "best" if retry_of is not None else (s.get("prefer") or "balanced")
         last_flush = [0.0]
         buf: list[str] = []
@@ -127,12 +154,24 @@ class Desk:
                 "complexity": res.profile.get("complexity"),
                 "why": res.route.get("reason", ""), "explain": why, "skills": res.skills,
                 "free": free, "tokens_in": tin, "tokens_out": tout,
+                "cost_note": spec.extra.get("cost_note", "") if spec else "",
                 "via": spec.extra.get("via", "") if spec else "", "retry": retry_of is not None,
                 "offline": (res.model == "offline")})
         except Exception as e:
             self.store.emit(sid, "error", {"text": redact(e)[:500]})
         finally:
             self.store.update(sid, status="idle")
+
+    async def _plan_chat(self, sid: str, text: str) -> bool:
+        """A chat picked a plan model: the official tool answers read-only. False -> router."""
+        from .workers import CHAT_RUNNERS, usable_engines
+        wanted, _ = engine_of(self.store.get(sid).get("model") or "")
+        plans = await usable_engines()
+        for eng in dict.fromkeys([wanted, *plans]):
+            if eng in plans and eng in CHAT_RUNNERS:
+                if await CHAT_RUNNERS[eng](self, sid).run(text):
+                    return True
+        return False
 
     # ----------------------------------------------------------- learning
     def feedback(self, sid: str, seq: int, good: bool) -> dict:
@@ -223,9 +262,9 @@ class Desk:
             return st["engine"]
         model = s.get("model") or ""
         engine = "router"
-        if model == "" or model in MODEL_IDS:
+        wanted = engine_of(model)[0]
+        if not model or wanted:
             plans = await usable_engines()
-            wanted = MODEL_IDS.get(model)
             if wanted and wanted in plans:
                 engine = wanted
             elif plans and (wanted or classify(text).complexity >= HARD_TASK or s.get("prefer") == "best"):

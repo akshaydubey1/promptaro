@@ -79,9 +79,13 @@ class Registry:
         self.catalog_cfg: dict = raw.get("catalog", {"enabled": False})
         self.models: dict[str, ModelSpec] = {}
         entries = list(raw.get("models", []))
-        if use_catalog and self.catalog_cfg.get("enabled", False):
-            from .catalog import build_specs
-            entries = build_specs(self.catalog_cfg, cached_only=not refresh_catalog) + entries
+        if use_catalog:
+            if self.catalog_cfg.get("enabled", False):
+                from .catalog import build_specs
+                entries = build_specs(self.catalog_cfg, cached_only=not refresh_catalog) + entries
+            else:
+                from .catalog import custom_specs        # user endpoints aren't part of the catalog toggle
+                entries = custom_specs() + entries
         for m in entries:
             self._add(m)
         self.breaker = CircuitBreaker()
@@ -101,6 +105,7 @@ class Registry:
             fallback_only=bool(m.get("fallback_only", False)),
             extra={"via": m.get("via", "config"), "name": m.get("name", m["id"]), "free": bool(m.get("free", False)),
                    "vendor": m.get("vendor") or m["id"].split("/", 1)[0], "trains": bool(m.get("trains", False)),
+                   "cost_note": m.get("cost_note", ""),
                    "quota": m.get("quota"), "limits": m.get("limits")},
         )
         self.models.setdefault(spec.id, spec)

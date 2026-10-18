@@ -18,15 +18,15 @@
     <div class="side-actions">
       <button class="btn primary" id="newAgent" title="Give an agent a task in one of your projects">New agent task</button>
       <button class="btn" id="newChat">New chat</button>
+      <button class="btn ghost" id="newProjChat" title="A chat bound to a folder — the model reads your code to answer">New project chat</button>
     </div>
-    <nav class="lists">
-      <div class="group" id="agentsGroup"><h3>Agents</h3><ul id="agentList"></ul></div>
-      <div class="group"><h3>Chats</h3><ul id="chatList"></ul></div>
-    </nav>
+    <nav class="lists" id="lists"></nav>
+    <button class="btn ghost side-link" id="studioBtn" title="Generate images and video on free tiers; convert, make and combine files"><span class="glyph">✦</span>Studio</button>
     <button class="btn ghost side-link" id="toolsBtn" title="Use Claude Code, Aider, Cline and more on free models"><span class="glyph">›_</span>Coding tools</button>
     <button class="btn ghost savings-btn hidden" id="savingsBtn" title="What smart routing has saved you"><span>Saved</span><b id="savingsAmt">$0</b></button>
     <button class="btn ghost side-link" id="detailsBtn" title="Show or hide which model answered, tokens and cost under each answer"><span class="dot" id="detailsDot"></span>Model info</button>
     <button class="btn ghost conn-btn" id="openConnections"><span class="dot" id="connDot"></span><span id="connLabel">Connections</span></button>
+    <button class="btn ghost side-link" id="termsBtn" title="Read the Terms of Use"><span class="glyph">§</span>Terms</button>
   </aside>
 
   <main class="main">
@@ -111,6 +111,25 @@
   </form>
 </dialog>
 
+<!-- New project chat -->
+<dialog id="projChatDlg">
+  <form method="dialog" class="dlg" id="projChatForm" novalidate>
+    <h2>New project chat</h2>
+    <p class="fine">A chat bound to a folder: the model reads your code to answer your questions, and it can never change or run anything.</p>
+    <label>Project folder</label>
+    <div class="row">
+      <input id="chatProjPath" placeholder="/Users/you/code/my-repo" autocomplete="off">
+      <button type="button" class="btn" id="pickChatFolder">Choose…</button>
+    </div>
+    <div class="recent" id="chatRecentProjects"></div>
+    <p class="form-error" id="projChatErr"></p>
+    <div class="row end">
+      <button type="button" class="btn" id="projChatCancel">Cancel</button>
+      <button type="submit" class="btn primary">Start chat</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- Connections -->
 <dialog id="connDlg">
   <div class="dlg wide">
@@ -136,12 +155,60 @@
   </div>
 </dialog>
 
+<!-- Studio: generate + file tools -->
+<dialog id="studioDlg">
+  <div class="dlg wide">
+    <h2>Studio</h2>
+    <p class="fine" id="studioCaps"></p>
+    <h3>Generate</h3>
+    <div class="row">
+      <select id="genKind"><option value="image">Image</option><option value="video">Video</option></select>
+      <select id="genSize"><option value="square">Square</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option><option value="hd">HD (16:9)</option></select>
+    </div>
+    <textarea id="genPrompt" rows="3" placeholder="A koi pond at dusk, watercolor style…" spellcheck="true"></textarea>
+    <div class="row"><button class="btn primary" id="genGo">Generate</button><span class="fine" id="genStatus"></span></div>
+    <label class="check fine"><input type="checkbox" id="genPaid"> Allow paid image models — providers like Google AI Studio may bill your key once free quota runs out</label>
+    <div id="genResult"></div>
+    <h3>Files</h3>
+    <p class="fine">Make or combine PDFs, and convert images, audio, video and documents. Files stay on this computer.</p>
+    <div class="row">
+      <input id="convPaths" placeholder="/path/to/file.png, /path/to/other.pdf — one per line or comma" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn" id="pickFiles">Choose…</button>
+    </div>
+    <div class="row">
+      <select id="convAction">
+        <option value="convert">Convert each file to…</option>
+        <option value="make-pdf">Make one PDF from these files</option>
+        <option value="merge-pdf">Combine these PDFs</option>
+      </select>
+      <select id="convFmt"></select>
+      <input id="convName" placeholder="output name (optional)" autocomplete="off" spellcheck="false" style="max-width:170px">
+      <button class="btn primary" id="convGo">Run</button>
+    </div>
+    <p class="form-error" id="convErr"></p>
+    <div id="convResult"></div>
+    <div class="row end"><button class="btn" id="studioClose">Done</button></div>
+  </div>
+</dialog>
+
 <!-- Savings -->
 <dialog id="savingsDlg">
   <div class="dlg">
     <h2>Savings</h2>
     <div id="savingsBody"></div>
     <div class="row end"><button class="btn" id="savingsClose">Done</button></div>
+  </div>
+</dialog>
+
+<dialog id="legalDlg" oncancel="event.preventDefault()">
+  <div class="dlg legal">
+    <h2>Terms of Use</h2>
+    <p class="sub">Promptaro is by Akshay Dubey. Read and accept before using the app.</p>
+    <pre class="terms" id="legalTerms"></pre>
+    <div class="row end">
+      <button class="btn hidden" id="legalClose">Close</button>
+      <button class="btn primary" id="legalAccept">I agree</button>
+    </div>
   </div>
 </dialog>
 
