@@ -14,9 +14,14 @@ foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetF
 Write-Host "Promptaro is in your Start menu and on your desktop."
 
 # Put the coding-tool launchers (promptaro-claude, promptaro-env) on the user's PATH.
+# Read/write the raw registry value: GetEnvironmentVariable expands %VAR% entries,
+# and saving the expanded form back destroys them (a well-known PATH corruption).
 $bin = Join-Path $env:USERPROFILE ".promptaro\bin"
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+$userPath = [string]$envKey.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 if (-not ($userPath -split ";" | Where-Object { $_ -ieq $bin })) {
-  [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $bin), "User")
+  $newPath = if ($userPath) { $userPath.TrimEnd(";") + ";" + $bin } else { $bin }
+  $envKey.SetValue("Path", $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)
   Write-Host "Added $bin to your PATH (new terminals pick it up — promptaro-claude etc.)."
 }
+$envKey.Close()

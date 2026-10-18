@@ -310,7 +310,10 @@ class Workspace:
         p = self.path(path)
         if not p.is_file():
             raise ToolError(f"{path} does not exist")
-        text = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = p.read_text(encoding="utf-8")          # strict: errors="replace" then a
+        except UnicodeDecodeError:                        # rewrite would corrupt non-UTF-8 bytes
+            raise ToolError(f"{path} isn't UTF-8 text — editing it would corrupt its contents")
         n = text.count(old) if old else 0
         if n == 0:
             raise ToolError("`old` text not found — read the file again and copy the snippet exactly")

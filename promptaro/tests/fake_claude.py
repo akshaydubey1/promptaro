@@ -10,7 +10,8 @@ if a[:2] == ["auth", "status"]:
                       "apiProvider": "firstParty"}))
     sys.exit(0)
 if "-p" in a:
-    Path(os.environ["FAKE_CLAUDE_LOG"]).write_text(json.dumps({"argv": a, "has_api_key": "ANTHROPIC_API_KEY" in os.environ}))
+    Path(os.environ["FAKE_CLAUDE_LOG"]).write_text(json.dumps({"argv": a, "stdin": sys.stdin.read(),
+                                                              "has_api_key": "ANTHROPIC_API_KEY" in os.environ}))
     if os.environ.get("FAKE_CLAUDE_FAIL"):
         print("Error: usage limit reached", file=sys.stderr); sys.exit(1)
     out = lambda d: print(json.dumps(d), flush=True)

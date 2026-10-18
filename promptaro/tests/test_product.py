@@ -49,6 +49,16 @@ def test_detects_chatgpt_plan(codex, monkeypatch, mode, sub):
     assert st["installed"] and st["subscription"] is sub
 
 
+def test_prompt_travels_over_stdin_not_argv(codex, desk_factory, repo):
+    """Quotes/&/% in a task must reach the CLI over stdin — on Windows a .cmd shim
+    re-parses the command line, where they'd run as commands (BatBadBut)."""
+    desk = desk_factory(Scripted())
+    _run(desk, repo, 'Fix the "a & b" bug %PATH%', model="codex")
+    call = json.loads(codex.read_text())
+    assert 'Fix the "a & b" bug %PATH%' in call["stdin"]    # WORKER_NOTE prefixes it
+    assert not any("&" in a or "%PATH%" in a or '"' in a for a in call["argv"])
+
+
 def test_hard_task_runs_on_chatgpt_plan(codex, desk_factory, repo):
     fake = Scripted()
     desk = desk_factory(fake)
@@ -63,7 +73,8 @@ def test_hard_task_runs_on_chatgpt_plan(codex, desk_factory, repo):
     assert "a + b" in Path(s["worktree"], "calc.py").read_text()
     assert s["cost"] == 0 and s["tokens_in"] == 3000 and s["state"]["codex_session"] == "thread-9"
     call = json.loads(codex.read_text())
-    assert call["has_api_key"] is False and 'sandbox_mode="workspace-write"' in call["argv"]
+    assert call["has_api_key"] is False
+    assert call["argv"][call["argv"].index("--sandbox") + 1] == "workspace-write"
     assert desk.store.totals()["subscription_runs"] == 1 and desk.store.totals()["saved"] > 0
     # a follow-up resumes the same Codex conversation
     async def follow_up():

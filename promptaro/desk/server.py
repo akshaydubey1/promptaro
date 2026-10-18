@@ -535,10 +535,17 @@ async def open_in(sid: str, b: OpenBody):
     mac = platform.system() == "Darwin"
     if b.app in ("code", "cursor"):
         exe = shutil.which(b.app)
-        if exe:
-            # .cmd shims (npm-installed code/cursor) can't CreateProcess directly.
-            subprocess.Popen([exe, path],
-                             shell=os.name == "nt" and exe.lower().endswith((".cmd", ".bat")))
+        if exe and os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+            # VS Code / Cursor install as <App>\Code.exe with bin\code.cmd beside it.
+            # Run the real exe: the .cmd would need shell=True, and cmd would
+            # re-parse a project path like "R&D" as commands.
+            real = Path(exe).resolve().parent.parent / f"{b.app.capitalize()}.exe"
+            if real.exists():
+                subprocess.Popen([str(real), path])
+            else:
+                subprocess.Popen([exe, path], shell=True)
+        elif exe:
+            subprocess.Popen([exe, path])
         elif mac:
             subprocess.Popen(["open", "-a", "Visual Studio Code" if b.app == "code" else "Cursor", path])
         else:

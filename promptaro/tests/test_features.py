@@ -123,6 +123,18 @@ def test_chat_pick_uses_the_plan(client, claude, repo):
     assert "Read(**/.env*)" in denied and "Read(~/.ssh/**)" in denied
 
 
+def test_prompt_travels_over_stdin_not_argv(client, claude):
+    """Quotes/&/% in a prompt must arrive byte-identical — on Windows a .cmd shim
+    re-parses the command line, where they'd run as commands (BatBadBut)."""
+    sid = client.post("/api/sessions", json={"model": "claude-code"}, headers=H).json()["id"]
+    hostile = 'Fix the "a & b" bug %PATH%'
+    client.post(f"/api/sessions/{sid}/messages", json={"text": hostile}, headers=H)
+    wait_answer(client, sid, 1)
+    call = json.loads(claude.read_text())
+    assert call["stdin"] == hostile                        # exact bytes, un-escaped
+    assert hostile not in call["argv"] and "hi" not in call["argv"]
+
+
 def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
     """When the plan tool can't answer, a normal model does — and the chat says so."""
     monkeypatch.setenv("FAKE_CLAUDE_FAIL", "1")
@@ -529,7 +541,7 @@ def test_unbound_subscription_chat_cant_read_files(desk_factory):
     assert "features.shell_tool=false" in c and "features.unified_exec=false" in c
     # bound to a project: reads stay on (sandboxed), writes still off
     c2 = workers.CodexChatRun(desk, "x").args("codex", "hi", {"project": "/tmp/proj"}, {})
-    assert 'sandbox_mode="read-only"' in c2 and not any("shell_tool" in x for x in c2)
+    assert c2[c2.index("--sandbox") + 1] == "read-only" and not any("shell_tool" in x for x in c2)
 
 
 def test_chat_deny_rules_cover_credentials(desk_factory):
