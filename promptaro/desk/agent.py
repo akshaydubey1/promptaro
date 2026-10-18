@@ -71,7 +71,7 @@ def project_hints(root: Path) -> list[str]:
         h.append(f"Python — tests likely run with `{py} -m pytest -q`")
     if (root / "package.json").exists():
         try:
-            scripts = json.loads((root / "package.json").read_text()).get("scripts", {})
+            scripts = json.loads((root / "package.json").read_text(encoding="utf-8")).get("scripts", {})
             if "test" in scripts:
                 h.append("Node — tests run with `npm test`")
         except Exception:

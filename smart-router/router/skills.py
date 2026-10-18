@@ -45,7 +45,7 @@ class SkillLibrary:
     def load(cls, folder: str | Path) -> "SkillLibrary":
         lib = cls()
         for p in sorted(Path(folder).glob("*.md")):
-            text = p.read_text()
+            text = p.read_text(encoding="utf-8")
             m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
             if not m:
                 continue

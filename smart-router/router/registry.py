@@ -71,7 +71,7 @@ class CircuitBreaker:
 
 class Registry:
     def __init__(self, path: str | Path, use_catalog: bool = True, refresh_catalog: bool = True):
-        raw = yaml.safe_load(Path(path).read_text())
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         self.defaults = raw.get("defaults", {})
         self.quality_targets: dict[str, float] = raw.get("quality_targets", {})
         self.weights: dict[str, float] = raw.get("weights", {})

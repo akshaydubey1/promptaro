@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -187,16 +188,20 @@ def test_gateway_usage_shows_in_savings(client):
 
 def test_install_launchers(client, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home2"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home2"))      # Path.home() on Windows
+    from desk import launchers
     r = client.post("/api/gateway/launchers", headers=H).json()
-    names = sorted(Path(f).name for f in r["files"])
+    names = sorted(Path(f).stem for f in r["files"])                # .cmd suffix on Windows
     assert names == ["promptaro-aider", "promptaro-claude", "promptaro-env", "tw-aider", "tw-claude", "tw-env"]
     for f in r["files"]:
-        assert "pro-" + "x" not in Path(f).read_text()            # the token is fetched at run time, never stored
-    claude = (tmp_path / "home2" / ".local" / "bin" / "promptaro-claude").read_text()
+        assert "pro-" + "x" not in Path(f).read_text(encoding="utf-8")  # the token is fetched at run time, never stored
+    ext = ".cmd" if os.name == "nt" else ""
+    d = launchers.bin_dir()
+    claude = (d / f"promptaro-claude{ext}").read_text(encoding="utf-8")
     assert "ANTHROPIC_AUTH_TOKEN" in claude and "api/gateway/token" in claude and "Akshay Dubey" in claude
-    import os
-    assert os.access(tmp_path / "home2" / ".local" / "bin" / "promptaro-claude", os.X_OK)
-    assert "promptaro-claude" in (tmp_path / "home2" / ".local" / "bin" / "tw-claude").read_text()  # legacy shim
+    if os.name == "posix":
+        assert os.access(d / "promptaro-claude", os.X_OK)
+    assert "promptaro-claude" in (d / f"tw-claude{ext}").read_text(encoding="utf-8")  # legacy shim
 
 
 def test_free_status_lists_providers(client):

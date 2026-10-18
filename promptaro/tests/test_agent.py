@@ -89,7 +89,8 @@ def test_never_ask_still_blocks_exfiltration_and_wreckage(tmp_path):
     assert needs_approval("echo $(pwd)", "never_ask", ws) is False
     # Redirection: only safe /dev sinks pass; real devices and outside paths are refused.
     assert needs_approval("echo hi > /dev/disk0", "never_ask", ws) is None
-    assert needs_approval("echo hi > /dev/null", "never_ask", ws) is False
+    sink = "NUL" if os.name == "nt" else "/dev/null"   # /dev/null is a real outside path on Windows
+    assert needs_approval(f"echo hi > {sink}", "never_ask", ws) is False
     assert needs_approval("make build &> build.log", "never_ask", ws) is False
     assert needs_approval("make build &> /tmp/x", "never_ask", ws) is None
     # Ordinary work still runs without asking.
@@ -113,7 +114,8 @@ def test_env_scrub_covers_credential_shapes(monkeypatch):
     env = _clean_env()
     for k in ("GITLAB_PAT", "DATABASE_DSN", "ODD_NAME", "SSH_AUTH_SOCK"):
         assert k not in env
-    assert env["NORMAL_URL"] == "http://localhost:8000" and "HOME" in env
+    home_var = "USERPROFILE" if os.name == "nt" else "HOME"
+    assert env["NORMAL_URL"] == "http://localhost:8000" and home_var in env
 
 
 def test_env_scrub_removes_half_git_config_and_repo_pointers(monkeypatch, tmp_path):

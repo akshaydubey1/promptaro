@@ -272,7 +272,7 @@ class Workspace:
             raise ToolError(f"{path} does not exist")
         if p.stat().st_size > 2_000_000:
             raise ToolError(f"{path} is larger than 2 MB; use search instead")
-        lines = p.read_text(errors="replace").splitlines()
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         start = max(1, int(start or 1))
         end = min(len(lines), int(end) if end else start + READ_LINES - 1)
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))
@@ -302,7 +302,7 @@ class Workspace:
         p = self.path(path)
         existed = p.exists()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content if isinstance(content, str) else str(content))
+        p.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
         return ToolResult(True, f"{'Replaced' if existed else 'Created'} {self.rel(p)} ({len(content.splitlines())} lines)",
                           {"path": self.rel(p), "created": not existed})
 
@@ -310,13 +310,13 @@ class Workspace:
         p = self.path(path)
         if not p.is_file():
             raise ToolError(f"{path} does not exist")
-        text = p.read_text(errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
         n = text.count(old) if old else 0
         if n == 0:
             raise ToolError("`old` text not found — read the file again and copy the snippet exactly")
         if n > 1:
             raise ToolError(f"`old` text appears {n} times — include more surrounding lines so it is unique")
-        p.write_text(text.replace(old, new, 1))
+        p.write_text(text.replace(old, new, 1), encoding="utf-8")
         return ToolResult(True, f"Edited {self.rel(p)}", {"path": self.rel(p)})
 
     # -------------------------------------------------------------- run

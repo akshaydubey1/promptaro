@@ -488,7 +488,7 @@ def test_text_pdf_handles_unicode(tmp_path):
     pytest.importorskip("pypdf")
     from desk import convert
     txt = tmp_path / "hindi.txt"
-    txt.write_text("नमस्ते दुनिया — hello world")
+    txt.write_text("नमस्ते दुनिया — hello world", encoding="utf-8")
     out = convert.make_pdf([txt], tmp_path / "out.pdf")
     assert out.read_bytes()[:5] == b"%PDF-"
     if convert._uni_font({ord(c) for c in "नमस्ते"}):   # a covering font exists on this machine

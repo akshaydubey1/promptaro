@@ -49,7 +49,7 @@ def backend() -> str:
 
 def _file_read() -> dict:
     try:
-        return json.loads(_FALLBACK.read_text())
+        return json.loads(_FALLBACK.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -58,7 +58,7 @@ def _file_write(d: dict) -> None:
     _FALLBACK.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(_FALLBACK.parent, stat.S_IRWXU)
     tmp = _FALLBACK.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d))
+    tmp.write_text(json.dumps(d), encoding="utf-8")
     os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
     tmp.replace(_FALLBACK)
 
@@ -80,7 +80,7 @@ def get(name: str) -> str:
     if v := _file_read().get(name):                            # noqa: E501 — read fallback file first
         return v
     try:
-        return json.loads(_LEGACY_FALLBACK.read_text()).get(name, "")
+        return json.loads(_LEGACY_FALLBACK.read_text(encoding="utf-8")).get(name, "")
     except Exception:
         return ""
 

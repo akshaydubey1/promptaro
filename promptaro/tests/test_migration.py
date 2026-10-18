@@ -106,7 +106,7 @@ def test_legacy_model_aliases_still_advertised(client):
 
 def test_promptaro_launchers_plus_legacy_shims(client, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "h"))
-    files = {Path(f).name for f in client.post("/api/gateway/launchers", headers=H).json()["files"]}
+    files = {Path(f).stem for f in client.post("/api/gateway/launchers", headers=H).json()["files"]}
     assert {"promptaro-claude", "promptaro-aider", "promptaro-env"} <= files
     assert {"tw-claude", "tw-aider", "tw-env"} <= files          # compat shims installed too
 
