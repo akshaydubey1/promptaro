@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import Scripted, act, drain_catalog_refresh, wait_task
+from conftest import Scripted, act, drain_catalog_refresh, fake_cli, wait_task
 from desk import workers
 from router import catalog
 
@@ -33,7 +33,7 @@ def client(router_root):
 
 @pytest.fixture
 def claude(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", FAKE)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", fake_cli(Path(FAKE), tmp_path, "fake_claude"))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude_call.json"))
     monkeypatch.setattr(workers, "_status_cache", {})
     return tmp_path / "claude_call.json"

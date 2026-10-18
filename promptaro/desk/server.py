@@ -536,7 +536,9 @@ async def open_in(sid: str, b: OpenBody):
     if b.app in ("code", "cursor"):
         exe = shutil.which(b.app)
         if exe:
-            subprocess.Popen([exe, path])
+            # .cmd shims (npm-installed code/cursor) can't CreateProcess directly.
+            subprocess.Popen([exe, path],
+                             shell=os.name == "nt" and exe.lower().endswith((".cmd", ".bat")))
         elif mac:
             subprocess.Popen(["open", "-a", "Visual Studio Code" if b.app == "code" else "Cursor", path])
         else:
@@ -731,7 +733,7 @@ async def tool_pick_files():
     out, _ = await proc.communicate()
     if proc.returncode != 0:
         return {"paths": []}
-    return {"paths": [p for p in out.decode().splitlines() if p.strip()]}
+    return {"paths": [p for p in out.decode(errors="replace").splitlines() if p.strip()]}
 
 
 class ConvertBody(BaseModel):
@@ -819,7 +821,7 @@ async def pick_folder():
     out, _ = await proc.communicate()
     if proc.returncode != 0:
         return {"path": ""}
-    p = out.decode().strip()
+    p = out.decode(errors="replace").strip()
     return {"path": p.rstrip("/\\") if len(p) > 3 else p}
 
 

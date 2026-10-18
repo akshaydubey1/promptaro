@@ -23,6 +23,9 @@ one when a step fails.
 | **Windows** | Double-click **Install Promptaro.bat** once — a Start-menu and desktop shortcut appear *and the app starts*. Next time, click the shortcut. To run without installing, use **Start Promptaro.bat**. |
 | **Linux** | Run `packaging/install-linux.sh` once — an app-menu entry appears *and the app starts*. To run without installing, `./launch.sh`. |
 
+**Runs on** macOS 11 or newer (Intel and Apple Silicon), Windows 10/11, and Linux. Python is installed and managed
+by the launcher — you don't need anything pre-installed except a browser.
+
 The first start installs what it needs (about a minute). It opens in its own window if Chrome, Edge or Brave is
 installed, otherwise in your browser. It keeps running in the background after the window closes, so it opens
 instantly next time; **Connections → Quit Promptaro** stops it.

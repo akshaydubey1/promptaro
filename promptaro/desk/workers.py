@@ -122,14 +122,25 @@ def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
 
 def find_claude() -> str | None:
     home = Path.home()
-    return _find(("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"), "claude", [home / ".local/bin/claude", home / ".claude/local/claude",
-                                                       "/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
+    return _find(("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"), "claude",
+                 [home / ".local/bin/claude", home / ".claude/local/claude",
+                  "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                  home / "AppData/Roaming/npm/claude.cmd"])         # npm on Windows
 
 
 def find_codex() -> str | None:
     home = Path.home()
-    return _find(("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"), "codex", [home / ".local/bin/codex", home / ".npm-global/bin/codex",
-                                                     "/opt/homebrew/bin/codex", "/usr/local/bin/codex"])
+    return _find(("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"), "codex",
+                 [home / ".local/bin/codex", home / ".npm-global/bin/codex",
+                  "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
+                  home / "AppData/Roaming/npm/codex.cmd"])          # npm on Windows
+
+
+def _spawn_args(argv: list[str]) -> list[str]:
+    """Windows can't CreateProcess a .cmd/.bat shim — run it through cmd.exe."""
+    if os.name == "nt" and Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
+        return [os.environ.get("COMSPEC", "cmd"), "/c", *argv]
+    return argv
 
 
 def _worker_env() -> dict:
@@ -150,7 +161,7 @@ def _worker_env() -> dict:
 
 
 async def _run_status(args: list[str]) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(*args, env=_worker_env(), stdout=asyncio.subprocess.PIPE,
+    proc = await asyncio.create_subprocess_exec(*_spawn_args(args), env=_worker_env(), stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL)
     out, _ = await asyncio.wait_for(proc.communicate(), 15)
     return proc.returncode or 0, out.decode(errors="replace")
@@ -299,7 +310,7 @@ class _CliRun:
                                   "explain": {"level": "hard", "because": self.why(),
                                               "subscription": True}})
         try:
-            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=self.cwd(s),
+            proc = await asyncio.create_subprocess_exec(*_spawn_args(self.args(exe, text, s, st)), cwd=self.cwd(s),
                                                         env=_worker_env(), stdout=asyncio.subprocess.PIPE,
                                                         stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
                                                         limit=16 * 1024 * 1024)

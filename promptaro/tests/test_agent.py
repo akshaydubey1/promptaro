@@ -147,7 +147,8 @@ def test_edit_requires_unique_match(tmp_path):
 
 
 def test_run_timeout_kills(tmp_path):
-    r = asyncio.run(Workspace(tmp_path).run("sleep 30", timeout=5))
+    cmd = "ping -n 30 127.0.0.1 >nul" if os.name == "nt" else "sleep 30"
+    r = asyncio.run(Workspace(tmp_path).run(cmd, timeout=5))
     assert not r.ok and r.meta["timeout"]
 
 

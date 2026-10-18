@@ -21,6 +21,8 @@ Download or clone this folder, then **double-click one file. Promptaro installs 
 | **Windows** | `promptaro/Install Promptaro.bat` | Adds **Promptaro** to the Start menu and desktop *and starts it*. From then on, click the shortcut. |
 | **Linux** | `promptaro/packaging/install-linux.sh` | Adds **Promptaro** to your app menu *and starts it*. |
 
+Works on macOS 11+ (Intel and Apple Silicon), Windows 10/11 and Linux.
+
 First start takes about a minute (it sets up its Python tools). Afterwards it opens instantly and keeps
 running in the background; **Connections → Quit Promptaro** stops it. No code needed anywhere — no
 terminal commands, no build steps.

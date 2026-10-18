@@ -9,6 +9,7 @@ with what's installed, the error says exactly what's missing.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -269,6 +270,20 @@ def _convert_doc(inp: Path, out: Path, fmt: str) -> Path:
                        "with the system's converter (pandoc isn't installed).")
 
 
+def _docx_text(path: Path) -> str | None:
+    """.docx is a zip of XML — pull the paragraph text without any external tool."""
+    if path.suffix.lower() != ".docx":
+        return None
+    try:
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+        xml = re.sub(r"<w:p[ >/]", "\n<w:p ", xml)          # paragraphs -> newlines
+        return re.sub(r"<[^>]+>", "", xml).strip()
+    except Exception:
+        return None
+
+
 def _doc_text(inp: Path) -> str:
     if shutil.which("textutil"):
         tmp = inp.with_suffix(".to-text.txt")
@@ -281,6 +296,9 @@ def _doc_text(inp: Path) -> str:
         p = subprocess.run(["pandoc", str(inp), "-t", "plain"], capture_output=True, text=True, timeout=300)
         if p.returncode == 0:
             return p.stdout
+    text = _docx_text(inp)
+    if text is not None:
+        return text
     return inp.read_text(errors="replace")
 
 

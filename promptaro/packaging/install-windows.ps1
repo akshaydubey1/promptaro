@@ -12,3 +12,11 @@ foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetF
   Remove-Item (Join-Path $dir "Tillwright.lnk") -ErrorAction SilentlyContinue   # old shortcut, if present
 }
 Write-Host "Promptaro is in your Start menu and on your desktop."
+
+# Put the coding-tool launchers (promptaro-claude, promptaro-env) on the user's PATH.
+$bin = Join-Path $env:USERPROFILE ".promptaro\bin"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not ($userPath -split ";" | Where-Object { $_ -ieq $bin })) {
+  [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $bin), "User")
+  Write-Host "Added $bin to your PATH (new terminals pick it up — promptaro-claude etc.)."
+}
