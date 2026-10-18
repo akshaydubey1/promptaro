@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-TERMS_VERSION = "1.0"
+TERMS_VERSION = "1.1"
 
 TERMS_TEXT = """PROMPTARO — TERMS OF USE AND DISCLAIMER
 Version {TERMS_VERSION} — Akshay Dubey
@@ -75,8 +75,8 @@ limits liability only to the extent the law allows.
 11. Governing law and contact. These terms are governed by the laws of
 {GOVERNING_LAW}, without regard to conflict-of-laws rules. Where mandatory
 consumer-protection law where you live gives you stronger rights, those rights
-are unaffected. Contact the Author through the project page:
-github.com/akshaydubey1/promptaro.
+are unaffected. Contact the Author at akshay007cool@gmail.com, or through the
+project page: github.com/akshaydubey1/promptaro.
 
 Acceptance is recorded on this computer only — the terms version and the date.
 Nothing about you is transmitted anywhere.
