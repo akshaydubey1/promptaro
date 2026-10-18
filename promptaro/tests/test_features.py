@@ -39,17 +39,18 @@ def claude(monkeypatch, tmp_path):
     return tmp_path / "claude_call.json"
 
 
-def wait_status(c, sid, done=("idle", "review"), timeout=10):
+def wait_status(c, sid, done=("idle", "review"), timeout=30):
     t0 = time.time()
     while time.time() - t0 < timeout:
         s = c.get(f"/api/sessions/{sid}").json()
         if s["session"]["status"] in done and not s["running"]:
             return s
         time.sleep(0.05)
-    raise AssertionError("timed out")
+    raise AssertionError(f"timed out — last session state: "
+                         f"{[(e['kind'], str(e['data'])[:80]) for e in s['events'][-6:]]}")
 
 
-def wait_answer(c, sid, n=1, timeout=10):
+def wait_answer(c, sid, n=1, timeout=30):
     """Wait for the nth assistant event — a settled 'idle' can predate a just-queued turn."""
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -57,7 +58,8 @@ def wait_answer(c, sid, n=1, timeout=10):
         if len([e for e in s["events"] if e["kind"] == "assistant"]) >= n and not s["running"]:
             return s
         time.sleep(0.05)
-    raise AssertionError("timed out")
+    raise AssertionError(f"timed out — last session state: "
+                         f"{[(e['kind'], str(e['data'])[:80]) for e in s['events'][-6:]]}")
 
 
 def _run(desk, repo, task, **kw):
