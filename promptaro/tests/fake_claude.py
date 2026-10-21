@@ -10,8 +10,11 @@ if a[:2] == ["auth", "status"]:
                       "apiProvider": "firstParty"}))
     sys.exit(0)
 if "-p" in a:
-    Path(os.environ["FAKE_CLAUDE_LOG"]).write_text(json.dumps({"argv": a, "stdin": sys.stdin.read(),
-                                                              "has_api_key": "ANTHROPIC_API_KEY" in os.environ}))
+    # stdin bytes are UTF-8 by contract; sys.stdin.read() would decode with the
+    # platform codepage (cp1252 on Windows) and mojibake what arrived correctly.
+    Path(os.environ["FAKE_CLAUDE_LOG"]).write_text(json.dumps(
+        {"argv": a, "stdin": sys.stdin.buffer.read().decode("utf-8"),
+         "has_api_key": "ANTHROPIC_API_KEY" in os.environ}))
     if os.environ.get("FAKE_CLAUDE_FAIL"):
         print("Error: usage limit reached", file=sys.stderr); sys.exit(1)
     out = lambda d: print(json.dumps(d), flush=True)
