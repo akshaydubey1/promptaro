@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
-# Adds Promptaro to the Start menu and desktop — Author: Akshay Dubey
+# Adds Promptaro to the Start menu and desktop - Author: Akshay Dubey
 $Here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ws = New-Object -ComObject WScript.Shell
 foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
@@ -29,6 +29,6 @@ if (-not ($userPath -split ";" | Where-Object { $_ -ieq $bin })) {
     $res = [System.IntPtr]::Zero
     $w.SendMessageTimeout([System.IntPtr]0xffff, 0x1A, [System.IntPtr]::Zero, "Environment", 2, 1000, [ref]$res) | Out-Null
   } catch {}
-  Write-Host "Added $bin to your PATH (new terminals pick it up — promptaro-claude etc.)."
+  Write-Host "Added $bin to your PATH (new terminals pick it up - promptaro-claude etc.)."
 }
 $envKey.Close()

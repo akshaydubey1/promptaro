@@ -39,6 +39,30 @@ jobs:
       - name: Promptaro app suite
         run: python -m pytest promptaro/tests -q
 
+      - name: Windows launcher really starts the app (fresh install, like a double-click)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          PROMPTARO_NO_WINDOW: "1"
+          PROMPTARO_PORT: "8799"
+        run: |
+          # Run the exact script the .bat runs, under Windows PowerShell 5.1 like a real double-click.
+          powershell -ExecutionPolicy Bypass -NoProfile -File promptaro/packaging/start-promptaro.ps1
+          if ($LASTEXITCODE -ne 0) { throw "launcher exited with $LASTEXITCODE" }
+          $h = Invoke-RestMethod http://127.0.0.1:8799/healthz -TimeoutSec 5
+          Write-Host "healthz:" ($h | ConvertTo-Json -Compress)
+          # The installer script must also parse under Windows PowerShell 5.1.
+          $errs = $null
+          foreach ($f in @("promptaro/packaging/install-windows.ps1", "promptaro/packaging/start-promptaro.ps1")) {
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$errs)
+            if ($errs) { throw "$f has parse errors: $errs" }
+          }
+
+      - name: Show launcher logs
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: Get-ChildItem $env:USERPROFILE\.promptaro\*.log | ForEach-Object { "=== $_"; Get-Content $_ -Tail 60 }
+
       - name: Whitespace / conflict-marker check
         if: github.event_name == 'pull_request'
         run: git diff --check origin/${{ github.base_ref }}...HEAD
