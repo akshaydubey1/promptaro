@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -196,19 +197,22 @@ async def _spawn(argv: list[str], **kw):
     return await asyncio.create_subprocess_exec(*plan, **kw)
 
 
-async def _feed_stdin(proc, text: str) -> None:
-    """Prompt goes down the pipe, then EOF so the CLI starts. Never on argv —
-    any shell in between would read quote/&/% as syntax."""
+def _prompt_file(text: str):
+    """Prompt rides a temp file into the child's stdin — never argv, where any
+    shell in between would read quote/&/% as syntax. A file beats a pipe here:
+    the child gets a natural EOF at end-of-file, and Windows' proactor loop has
+    no stdin write pipe to hang on while tearing down."""
+    fd, path = tempfile.mkstemp(prefix="promptaro-in-")
     try:
-        proc.stdin.write(text.encode("utf-8", errors="replace"))
-        await proc.stdin.drain()
-    except (BrokenPipeError, ConnectionResetError):
-        pass
-    try:
-        proc.stdin.close()
-        await proc.stdin.wait_closed()   # Windows (≤3.12): proc.wait() can hang on a half-closed pipe
+        with os.fdopen(fd, "wb") as f:
+            f.write(text.encode("utf-8", errors="replace"))
+        return path, open(path, "rb")
     except Exception:
-        pass
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
 
 
 def _worker_env() -> dict:
@@ -383,12 +387,19 @@ class _CliRun:
                                   "explain": {"level": "hard", "because": self.why(),
                                               "subscription": True}})
         try:
-            proc = await _spawn(self.args(exe, text, s, st), cwd=self.cwd(s),
-                                env=_worker_env(), stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.PIPE,
-                                limit=16 * 1024 * 1024)
-            feed = asyncio.create_task(_feed_stdin(proc, self.stdin_text(text)))
+            prompt_path, stdin_src = _prompt_file(self.stdin_text(text))
+            try:
+                proc = await _spawn(self.args(exe, text, s, st), cwd=self.cwd(s),
+                                    env=_worker_env(), stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE, stdin=stdin_src,
+                                    limit=16 * 1024 * 1024)
+            finally:
+                stdin_src.close()        # the child keeps its own inherited handle
         except Exception as e:
+            try:
+                os.unlink(prompt_path)
+            except (OSError, NameError):
+                pass
             store.emit(sid, "note", {"text": f"{LABEL[self.engine]} couldn't start "
                                              f"({type(e).__name__}). Trying the next option."})
             return False
@@ -413,9 +424,12 @@ class _CliRun:
             return False
         finally:
             store.update(sid, state=st)
-            for t in (err_task, feed):
-                if not t.done():
-                    t.cancel()
+            if not err_task.done():
+                err_task.cancel()
+            try:
+                os.unlink(prompt_path)   # child is done; its handle is closed
+            except OSError:
+                pass
 
         ok, summary, usage = self.outcome()
         err = ""
