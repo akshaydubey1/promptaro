@@ -83,7 +83,7 @@ class Ledger:
         if not self.path:
             return
         try:
-            d = json.loads(self.path.read_text())
+            d = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
             return
         if d.get("day") == self.day:
@@ -99,7 +99,7 @@ class Ledger:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
             tmp.write_text(json.dumps({"day": self.day, "month": self.month, "daily": self.daily,
-                                       "monthly": self.monthly, "paused": self.paused}))
+                                       "monthly": self.monthly, "paused": self.paused}), encoding="utf-8")
             os.replace(tmp, self.path)                      # atomic: a crash never leaves a half-written ledger
             try:
                 os.chmod(self.path, 0o600)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 import hashlib
 import time
@@ -47,7 +48,8 @@ def test_secret_roundtrip_and_permissions(isolated_secrets):
     secrets.set("OPENROUTER_API_KEY", "sk-or-abc")
     assert secrets.get("OPENROUTER_API_KEY") == "sk-or-abc"
     f = isolated_secrets / "credentials.json"
-    assert oct(f.stat().st_mode)[-3:] == "600"
+    if os.name == "posix":          # Windows has no rwx bits; protection is by user profile
+        assert oct(f.stat().st_mode)[-3:] == "600"
     secrets.delete("OPENROUTER_API_KEY")
     assert not secrets.has("OPENROUTER_API_KEY")
 

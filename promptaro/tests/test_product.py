@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from conftest import Scripted, act, wait_task
+from conftest import Scripted, act, fake_cli, wait_task
 from desk import workers
 from test_server import H, client, wait_status  # noqa: F401  (fixture)
 
@@ -20,7 +21,7 @@ HARD = ("Architect and implement a production-grade, thread-safe retry layer wit
 
 @pytest.fixture
 def codex(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROMPTARO_CODEX_BIN", FAKE_CODEX)
+    monkeypatch.setenv("PROMPTARO_CODEX_BIN", fake_cli(Path(FAKE_CODEX), tmp_path, "fake_codex"))
     monkeypatch.setenv("FAKE_CODEX_LOG", str(tmp_path / "codex_call.json"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-be-passed")
     return tmp_path / "codex_call.json"
@@ -28,7 +29,7 @@ def codex(monkeypatch, tmp_path):
 
 @pytest.fixture
 def claude(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", FAKE_CLAUDE)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", fake_cli(Path(FAKE_CLAUDE), tmp_path, "fake_claude"))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude_call.json"))
     return tmp_path / "claude_call.json"
 
@@ -48,6 +49,16 @@ def test_detects_chatgpt_plan(codex, monkeypatch, mode, sub):
     assert st["installed"] and st["subscription"] is sub
 
 
+def test_prompt_travels_over_stdin_not_argv(codex, desk_factory, repo):
+    """Quotes/&/% in a task must reach the CLI over stdin — on Windows a .cmd shim
+    re-parses the command line, where they'd run as commands (BatBadBut)."""
+    desk = desk_factory(Scripted())
+    _run(desk, repo, 'Fix the "a & b" bug %PATH%', model="codex")
+    call = json.loads(codex.read_text())
+    assert 'Fix the "a & b" bug %PATH%' in call["stdin"]    # WORKER_NOTE prefixes it
+    assert not any("&" in a or "%PATH%" in a or '"' in a for a in call["argv"])
+
+
 def test_hard_task_runs_on_chatgpt_plan(codex, desk_factory, repo):
     fake = Scripted()
     desk = desk_factory(fake)
@@ -62,7 +73,8 @@ def test_hard_task_runs_on_chatgpt_plan(codex, desk_factory, repo):
     assert "a + b" in Path(s["worktree"], "calc.py").read_text()
     assert s["cost"] == 0 and s["tokens_in"] == 3000 and s["state"]["codex_session"] == "thread-9"
     call = json.loads(codex.read_text())
-    assert call["has_api_key"] is False and 'sandbox_mode="workspace-write"' in call["argv"]
+    assert call["has_api_key"] is False
+    assert call["argv"][call["argv"].index("--sandbox") + 1] == "workspace-write"
     assert desk.store.totals()["subscription_runs"] == 1 and desk.store.totals()["saved"] > 0
     # a follow-up resumes the same Codex conversation
     async def follow_up():
@@ -187,16 +199,20 @@ def test_gateway_usage_shows_in_savings(client):
 
 def test_install_launchers(client, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home2"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home2"))      # Path.home() on Windows
+    from desk import launchers
     r = client.post("/api/gateway/launchers", headers=H).json()
-    names = sorted(Path(f).name for f in r["files"])
+    names = sorted(Path(f).stem for f in r["files"])                # .cmd suffix on Windows
     assert names == ["promptaro-aider", "promptaro-claude", "promptaro-env", "tw-aider", "tw-claude", "tw-env"]
     for f in r["files"]:
-        assert "pro-" + "x" not in Path(f).read_text()            # the token is fetched at run time, never stored
-    claude = (tmp_path / "home2" / ".local" / "bin" / "promptaro-claude").read_text()
+        assert "pro-" + "x" not in Path(f).read_text(encoding="utf-8")  # the token is fetched at run time, never stored
+    ext = ".cmd" if os.name == "nt" else ""
+    d = launchers.bin_dir()
+    claude = (d / f"promptaro-claude{ext}").read_text(encoding="utf-8")
     assert "ANTHROPIC_AUTH_TOKEN" in claude and "api/gateway/token" in claude and "Akshay Dubey" in claude
-    import os
-    assert os.access(tmp_path / "home2" / ".local" / "bin" / "promptaro-claude", os.X_OK)
-    assert "promptaro-claude" in (tmp_path / "home2" / ".local" / "bin" / "tw-claude").read_text()  # legacy shim
+    if os.name == "posix":
+        assert os.access(d / "promptaro-claude", os.X_OK)
+    assert "promptaro-claude" in (d / f"tw-claude{ext}").read_text(encoding="utf-8")  # legacy shim
 
 
 def test_free_status_lists_providers(client):

@@ -9,6 +9,7 @@ with what's installed, the error says exactly what's missing.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -166,7 +167,7 @@ def make_pdf(inputs: list[Path], out: Path) -> Path:
             for pg in src.pages:
                 w.add_page(pg)
         elif ext in ("txt", "md", "rtf"):
-            text = p.read_text(errors="replace") if ext != "rtf" else _rtf_text(p)
+            text = p.read_text(encoding="utf-8", errors="replace") if ext != "rtf" else _rtf_text(p)
             src = PdfReader(_text_pdf(text, title=p.stem))
             for pg in src.pages:
                 w.add_page(pg)
@@ -199,10 +200,10 @@ def _rtf_text(path: Path) -> str:
         tmp = path.with_suffix(".from-rtf.txt")
         try:
             _run(["textutil", "-convert", "txt", str(path), "-output", str(tmp)])
-            return tmp.read_text(errors="replace")
+            return tmp.read_text(encoding="utf-8", errors="replace")
         finally:
             tmp.unlink(missing_ok=True)
-    return path.read_text(errors="replace")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 # ------------------------------------------------------------------ convert
@@ -256,7 +257,7 @@ def _convert_av(inp: Path, out: Path, fmt: str) -> Path:
 def _convert_doc(inp: Path, out: Path, fmt: str) -> Path:
     ext = inp.suffix.lower().lstrip(".")
     if fmt == "pdf":
-        text = inp.read_text(errors="replace") if ext in ("txt", "md") else _doc_text(inp)
+        text = inp.read_text(encoding="utf-8", errors="replace") if ext in ("txt", "md") else _doc_text(inp)
         out.write_bytes(_text_pdf(text, title=inp.stem).getvalue())
         return out
     if fmt in _TEXTUTIL_FMT and shutil.which("textutil"):
@@ -269,19 +270,36 @@ def _convert_doc(inp: Path, out: Path, fmt: str) -> Path:
                        "with the system's converter (pandoc isn't installed).")
 
 
+def _docx_text(path: Path) -> str | None:
+    """.docx is a zip of XML — pull the paragraph text without any external tool."""
+    if path.suffix.lower() != ".docx":
+        return None
+    try:
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+        xml = re.sub(r"<w:p[ >/]", "\n<w:p ", xml)          # paragraphs -> newlines
+        return re.sub(r"<[^>]+>", "", xml).strip()
+    except Exception:
+        return None
+
+
 def _doc_text(inp: Path) -> str:
     if shutil.which("textutil"):
         tmp = inp.with_suffix(".to-text.txt")
         try:
             _run(["textutil", "-convert", "txt", str(inp), "-output", str(tmp)])
-            return tmp.read_text(errors="replace")
+            return tmp.read_text(encoding="utf-8", errors="replace")
         finally:
             tmp.unlink(missing_ok=True)
     if shutil.which("pandoc"):
         p = subprocess.run(["pandoc", str(inp), "-t", "plain"], capture_output=True, text=True, timeout=300)
         if p.returncode == 0:
             return p.stdout
-    return inp.read_text(errors="replace")
+    text = _docx_text(inp)
+    if text is not None:
+        return text
+    return inp.read_text(encoding="utf-8", errors="replace")
 
 
 def _convert_pdf(inp: Path, out: Path, fmt: str) -> Path:
@@ -290,7 +308,7 @@ def _convert_pdf(inp: Path, out: Path, fmt: str) -> Path:
             raise RuntimeError("Reading PDFs needs the pypdf package (bundled with the app).")
         from pypdf import PdfReader
         text = "\n\n".join((pg.extract_text() or "") for pg in PdfReader(str(inp)).pages)
-        out.write_text(text.strip() or "(no readable text in this PDF)")
+        out.write_text(text.strip() or "(no readable text in this PDF)", encoding="utf-8")
         return out
     raise RuntimeError("A PDF can become txt or markdown. (PDF -> images needs poppler, not bundled.)")
 

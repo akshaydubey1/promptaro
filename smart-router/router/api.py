@@ -90,7 +90,7 @@ _UI = Path(__file__).with_name("ui.html")
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def ui():
-    return _UI.read_text()
+    return _UI.read_text(encoding="utf-8")
 
 
 class RunBody(BaseModel):

@@ -88,14 +88,14 @@ def _read_cache(name: str, max_age_s: float) -> dict | list | None:
     p = _cache(name)
     try:
         if time.time() - p.stat().st_mtime <= max_age_s:
-            return json.loads(p.read_text())
+            return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         pass
     return None
 
 
 def _write_cache(name: str, data) -> None:
-    _cache(name).write_text(json.dumps(data))
+    _cache(name).write_text(json.dumps(data), encoding="utf-8")
 
 
 def fetch_openrouter_models(max_age_s: float = 86400, client: httpx.Client | None = None) -> list[dict]:

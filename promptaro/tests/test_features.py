@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import Scripted, act, drain_catalog_refresh, wait_task
+from conftest import Scripted, act, drain_catalog_refresh, fake_cli, wait_task
 from desk import workers
 from router import catalog
 
@@ -33,7 +33,7 @@ def client(router_root):
 
 @pytest.fixture
 def claude(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", FAKE)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", fake_cli(Path(FAKE), tmp_path, "fake_claude"))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude_call.json"))
     monkeypatch.setattr(workers, "_status_cache", {})
     return tmp_path / "claude_call.json"
@@ -121,6 +121,34 @@ def test_chat_pick_uses_the_plan(client, claude, repo):
     assert allowed == ["Read(./**)", "Grep(./**)", "Glob(./**)", "LS(./**)"]
     denied = argv[argv.index("--disallowedTools") + 1:]
     assert "Read(**/.env*)" in denied and "Read(~/.ssh/**)" in denied
+
+
+@pytest.mark.parametrize("hostile", [
+    'Fix the "a & b" bug %PATH%',                          # the classic BatBadBut payload
+    "bang ! and caret ^ chars",                            # cmd escapes/delayed expansion
+    "a prompt with\na line break",
+    "हिंदी में सवाल 🚀 emoji",                            # non-ASCII must survive UTF-8 piping
+    "x" * 9000,                                            # > cmd's 8191-char limit — stdin only
+])
+def test_prompt_travels_over_stdin_not_argv(client, claude, hostile):
+    """Hostile/long prompts must arrive byte-identical — on Windows a .cmd shim
+    re-parses the command line, where metacharacters would run as commands."""
+    sid = client.post("/api/sessions", json={"model": "claude-code"}, headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": hostile}, headers=H)
+    wait_answer(client, sid, 1, timeout=60)                # CI runners stall; the path is <1s locally
+    call = json.loads(claude.read_text())
+    assert call["stdin"] == hostile                        # exact bytes, un-escaped
+    assert hostile not in call["argv"]
+
+
+def test_cmd_fallback_refuses_metachar_args(monkeypatch):
+    """The quoted-cmd fallback can't safely carry % ! ^ or a quote — refuse, don't hope."""
+    monkeypatch.setattr(workers.os, "name", "nt")
+    monkeypatch.setattr(workers, "_resolve_cmd_shim", lambda s: None)
+    assert workers._spawn_plan(["C:\\npm\\claude.cmd", "-p"]).startswith('"')
+    for bad in ("a%PATH%b", "a!b", "a^b", 'a"b'):
+        with pytest.raises(RuntimeError):
+            workers._spawn_plan(["C:\\npm\\claude.cmd", bad])
 
 
 def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
@@ -488,7 +516,7 @@ def test_text_pdf_handles_unicode(tmp_path):
     pytest.importorskip("pypdf")
     from desk import convert
     txt = tmp_path / "hindi.txt"
-    txt.write_text("नमस्ते दुनिया — hello world")
+    txt.write_text("नमस्ते दुनिया — hello world", encoding="utf-8")
     out = convert.make_pdf([txt], tmp_path / "out.pdf")
     assert out.read_bytes()[:5] == b"%PDF-"
     if convert._uni_font({ord(c) for c in "नमस्ते"}):   # a covering font exists on this machine
@@ -529,7 +557,7 @@ def test_unbound_subscription_chat_cant_read_files(desk_factory):
     assert "features.shell_tool=false" in c and "features.unified_exec=false" in c
     # bound to a project: reads stay on (sandboxed), writes still off
     c2 = workers.CodexChatRun(desk, "x").args("codex", "hi", {"project": "/tmp/proj"}, {})
-    assert 'sandbox_mode="read-only"' in c2 and not any("shell_tool" in x for x in c2)
+    assert c2[c2.index("--sandbox") + 1] == "read-only" and not any("shell_tool" in x for x in c2)
 
 
 def test_chat_deny_rules_cover_credentials(desk_factory):

@@ -49,7 +49,7 @@ OpenRouter's public model list and refreshed daily.
 ### Where your keys go
 
 - Sign-in uses OpenRouter's standard OAuth (PKCE). The key it issues is stored in
-  your **macOS Keychain** (service name `akshay-smart-router`), never in the project folder.
+  your **system keychain** — macOS Keychain, Windows Credential Manager (service name `akshay-smart-router`) — never in the project folder.
   Without a system keychain it falls back to `~/.promptaro/credentials.json` (legacy `~/.akshay-router` is migrated) with owner-only permissions.
 - The app never displays or returns a stored key. **Disconnect** deletes it.
   You can also revoke it any time from your OpenRouter account.
@@ -77,7 +77,7 @@ curl -s localhost:8765/v1/run -H 'content-type: application/json' -d '{"instruct
 ```
 
 API docs at http://localhost:8765/docs. Docker (`docker compose up`) reads keys from
-`.env` instead of the keychain, since a container can't see your Mac's Keychain.
+`.env` instead of the keychain, since a container can't see the system keychain.
 
 ## Measured routing latency
 
@@ -109,7 +109,7 @@ The model call itself dominates total time; routing is noise next to it.
 ## Tests
 
 ```bash
-python -m pytest -q     # 95 tests, fully offline (mocked providers and sign-in)
+python -m pytest -q     # 103 tests, fully offline (mocked providers and sign-in)
 ```
 
 ---

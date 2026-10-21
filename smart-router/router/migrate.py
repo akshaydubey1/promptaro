@@ -122,12 +122,12 @@ def _repair_moved_worktrees(new: Path) -> None:
             dotgit = wt / ".git"
             if not dotgit.is_file():
                 continue
-            text = dotgit.read_text().strip()
+            text = dotgit.read_text(encoding="utf-8").strip()
             if not text.startswith("gitdir:"):
                 continue
             back = Path(text.split(":", 1)[1].strip()) / "gitdir"
             want = str(dotgit)
-            if back.parent.is_dir() and (not back.exists() or back.read_text().strip() != want):
-                back.write_text(want + "\n")
+            if back.parent.is_dir() and (not back.exists() or back.read_text(encoding="utf-8").strip() != want):
+                back.write_text(want + "\n", encoding="utf-8")
         except OSError:
             continue
