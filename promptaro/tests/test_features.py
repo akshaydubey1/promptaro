@@ -135,7 +135,7 @@ def test_prompt_travels_over_stdin_not_argv(client, claude, hostile):
     re-parses the command line, where metacharacters would run as commands."""
     sid = client.post("/api/sessions", json={"model": "claude-code"}, headers=H).json()["id"]
     client.post(f"/api/sessions/{sid}/messages", json={"text": hostile}, headers=H)
-    wait_answer(client, sid, 1)
+    wait_answer(client, sid, 1, timeout=60)                # CI runners stall; the path is <1s locally
     call = json.loads(claude.read_text())
     assert call["stdin"] == hostile                        # exact bytes, un-escaped
     assert hostile not in call["argv"]
