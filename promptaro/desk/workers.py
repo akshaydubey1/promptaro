@@ -206,6 +206,7 @@ async def _feed_stdin(proc, text: str) -> None:
         pass
     try:
         proc.stdin.close()
+        await proc.stdin.wait_closed()   # Windows (≤3.12): proc.wait() can hang on a half-closed pipe
     except Exception:
         pass
 
