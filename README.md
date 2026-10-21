@@ -66,10 +66,18 @@ The first start takes about a minute while it sets itself up. After that it open
 <details>
 <summary><b>Run it without installing</b></summary>
 
+Double-click **Start Promptaro** in the `promptaro` folder (`.command` on Mac, `.bat` on Windows). Or, from a terminal in this folder:
+
+```bash
+# Mac
+open "promptaro/Start Promptaro.command"
+# Linux
+./promptaro/launch.sh
 ```
-promptaro/Start Promptaro.command      # Mac
-promptaro/Start Promptaro.bat          # Windows
-promptaro/launch.sh                    # Linux
+
+```powershell
+# Windows (PowerShell): the quotes and the & are needed because the name has a space
+& ".\promptaro\Start Promptaro.bat"
 ```
 
 The two folders, `promptaro/` and `smart-router/`, must stay side by side.
