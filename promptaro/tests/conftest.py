@@ -141,6 +141,17 @@ def desk_factory(router_root, tmp_path):
     return make
 
 
+def fake_cli(py_file: Path, tmp_path: Path, stem: str) -> str:
+    """A runnable path for a fake CLI script. On Windows a .py isn't exec'able —
+    wrap it in a .cmd, which is exactly how npm installs real CLIs there (and so
+    exercises the .cmd spawn path in workers.py)."""
+    if os.name != "nt":
+        return str(py_file)
+    wrapper = tmp_path / f"{stem}.cmd"
+    wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{py_file}" %*\r\n')
+    return str(wrapper)
+
+
 def drain_catalog_refresh(c):
     """Wait out the app's startup registry swap (lifespan -> refresh_catalog -> reload).
 

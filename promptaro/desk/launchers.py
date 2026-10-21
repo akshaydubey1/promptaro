@@ -111,22 +111,22 @@ def install(port: int = 8770) -> dict:
         for name, body in WINDOWS.items():
             p = d / name
             p.write_text("@echo off\r\nrem Promptaro launcher by Akshay Dubey. Created by Promptaro; safe to delete.\r\n"
-                         + _WIN_TOKEN.format(port=port) + body.format(port=port))
+                         + _WIN_TOKEN.format(port=port) + body.format(port=port), encoding="utf-8")
             written.append(str(p))
         for legacy, target in LEGACY_WINDOWS.items():
             p = d / legacy
-            p.write_text(f"@echo off\r\ncall \"%~dp0{target}\" %*\r\n")
+            p.write_text(f"@echo off\r\ncall \"%~dp0{target}\" %*\r\n", encoding="utf-8")
             written.append(str(p))
     else:
         for name, (what, body) in POSIX.items():
             p = d / name
-            p.write_text(_POSIX_HEAD.format(what=what, port=port, src=HERE) + body)
+            p.write_text(_POSIX_HEAD.format(what=what, port=port, src=HERE) + body, encoding="utf-8")
             p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             written.append(str(p))
         for legacy, target in LEGACY_POSIX.items():
             p = d / legacy
             p.write_text(f'#!/bin/bash\n# Promptaro compatibility shim — forwards to {target}.\n'
-                         f'exec "$(dirname "$0")/{target}" "$@"\n')
+                         f'exec "$(dirname "$0")/{target}" "$@"\n', encoding="utf-8")
             p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             written.append(str(p))
     return {"dir": str(d), "files": written, "on_path": on_path(d)}

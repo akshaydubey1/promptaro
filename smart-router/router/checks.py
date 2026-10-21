@@ -75,9 +75,9 @@ def _run_python_tests(blocks: list[str], extra_tests: str | None, timeout_s: int
             name = Path(m.group(1)).name if m else f"module_{i}.py"
             if name.startswith("test_"):
                 has_test = True
-            (dp / name).write_text(body)
+            (dp / name).write_text(body, encoding="utf-8")
         if extra_tests:
-            (dp / "test_user_supplied.py").write_text(extra_tests)
+            (dp / "test_user_supplied.py").write_text(extra_tests, encoding="utf-8")
             has_test = True
         if not has_test:
             return True, "no tests to run"

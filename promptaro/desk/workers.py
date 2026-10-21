@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -114,6 +115,12 @@ def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
         override = os.environ.get(env_var)
         if override:                                       # an explicit override wins, or disables
             return override if Path(override).exists() else None
+    if os.name == "nt":
+        # A real .exe (native installer) beats any .cmd/.bat shim — no parsing,
+        # no shell in between, no reparse risk.
+        exe = shutil.which(name + ".exe")
+        if exe:
+            return exe
     for c in (shutil.which(name), *extra):
         if c and Path(c).exists() and os.access(c, os.X_OK):
             return str(c)
@@ -122,14 +129,90 @@ def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
 
 def find_claude() -> str | None:
     home = Path.home()
-    return _find(("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"), "claude", [home / ".local/bin/claude", home / ".claude/local/claude",
-                                                       "/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
+    return _find(("PROMPTARO_CLAUDE_BIN", "TILLWRIGHT_CLAUDE_BIN"), "claude",
+                 [home / ".local/bin/claude", home / ".claude/local/claude",
+                  "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                  home / "AppData/Roaming/npm/claude.cmd"])         # npm on Windows
 
 
 def find_codex() -> str | None:
     home = Path.home()
-    return _find(("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"), "codex", [home / ".local/bin/codex", home / ".npm-global/bin/codex",
-                                                     "/opt/homebrew/bin/codex", "/usr/local/bin/codex"])
+    return _find(("PROMPTARO_CODEX_BIN", "TILLWRIGHT_CODEX_BIN"), "codex",
+                 [home / ".local/bin/codex", home / ".npm-global/bin/codex",
+                  "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
+                  home / "AppData/Roaming/npm/codex.cmd"])          # npm on Windows
+
+
+def _resolve_cmd_shim(shim: str) -> list[str] | None:
+    """What an npm .cmd/.bat shim really runs: `node <cli.js>` or a sibling exe.
+    npm generates these wrappers with a fixed shape — a quoted "%dp0%" plus path in
+    the last line — so we can start the real program ourselves, skipping cmd.exe."""
+    try:
+        body = Path(shim).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    matches = re.findall(r'"%~?dp0%?\\([^"\r\n]+)"', body)
+    if not matches:
+        return None
+    # The LAST "%dp0%\..." is the payload (`node cli.js %*`) — earlier ones are
+    # probes like IF EXIST "%dp0%\node.exe". Split on the .cmd's backslashes.
+    target = Path(shim).resolve().parent.joinpath(*matches[-1].split("\\"))
+    if len(matches) == 1 and target.name.lower() == "node.exe":
+        return None                                        # probe line alone, no payload
+    if not target.exists():
+        return None
+    if target.suffix.lower() not in (".js", ".mjs", ".cjs"):
+        return [str(target)]
+    local = Path(shim).resolve().parent / "node.exe"        # npm checks %dp0%\node.exe first
+    node = str(local) if local.exists() else shutil.which("node")
+    return [node, str(target)] if node else None
+
+
+def _spawn_plan(argv: list[str]) -> list[str] | str:
+    """How to start the CLI. A Windows .cmd/.bat can't be CreateProcess'd, and
+    running it through `cmd /c` makes cmd re-parse the line — (), &, ", % inside
+    any argument would corrupt it or run extra commands ("BatBadBut"). Prefer
+    the program the shim wraps. Fallback: every arg individually quoted for cmd
+    (arguments here are app-chosen flags only — untrusted prompt text always
+    travels over stdin, never the command line). A str result is for
+    create_subprocess_shell, which hands the line to cmd verbatim."""
+    if os.name != "nt" or Path(argv[0]).suffix.lower() not in (".cmd", ".bat"):
+        return argv
+    direct = _resolve_cmd_shim(argv[0])
+    if direct:
+        return [*direct, *argv[1:]]
+    # Fallback: a fully-quoted cmd line. Quotes neutralise & | ( ) but NOT %VAR%
+    # expansion (works inside quotes), ! (if delayed expansion is on), ^ or an
+    # embedded " — so any fixed arg containing one refuses to launch this way.
+    if any(c in a for a in argv for c in "%!^\""):
+        raise RuntimeError(f"won't launch {Path(argv[0]).name} through cmd.exe — "
+                           "a fixed argument contains %, !, ^ or a quote")
+    return " ".join(f'"{a}"' for a in argv)
+
+
+async def _spawn(argv: list[str], **kw):
+    plan = _spawn_plan(argv)
+    if isinstance(plan, str):
+        return await asyncio.create_subprocess_shell(plan, **kw)
+    return await asyncio.create_subprocess_exec(*plan, **kw)
+
+
+def _prompt_file(text: str):
+    """Prompt rides a temp file into the child's stdin — never argv, where any
+    shell in between would read quote/&/% as syntax. A file beats a pipe here:
+    the child gets a natural EOF at end-of-file, and Windows' proactor loop has
+    no stdin write pipe to hang on while tearing down."""
+    fd, path = tempfile.mkstemp(prefix="promptaro-in-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(text.encode("utf-8", errors="replace"))
+        return path, open(path, "rb")
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
 
 
 def _worker_env() -> dict:
@@ -150,8 +233,8 @@ def _worker_env() -> dict:
 
 
 async def _run_status(args: list[str]) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(*args, env=_worker_env(), stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL)
+    proc = await _spawn(args, env=_worker_env(), stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL)
     out, _ = await asyncio.wait_for(proc.communicate(), 15)
     return proc.returncode or 0, out.decode(errors="replace")
 
@@ -259,6 +342,11 @@ class _CliRun:
     def args(self, exe: str, text: str, s: dict, st: dict) -> list[str]:
         raise NotImplementedError
 
+    def stdin_text(self, text: str) -> str:
+        """What goes down the pipe — the prompt. It never reaches argv, so shell
+        metacharacters in user text can't be re-parsed by any shim or shell."""
+        return text
+
     def handle(self, ev: dict, st: dict) -> None:
         raise NotImplementedError
 
@@ -299,42 +387,82 @@ class _CliRun:
                                   "explain": {"level": "hard", "because": self.why(),
                                               "subscription": True}})
         try:
-            proc = await asyncio.create_subprocess_exec(*self.args(exe, text, s, st), cwd=self.cwd(s),
-                                                        env=_worker_env(), stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
-                                                        limit=16 * 1024 * 1024)
+            prompt_path, stdin_src = _prompt_file(self.stdin_text(text))
+            try:
+                # Separate read handle — an inherited fd shares its file offset
+                # with the child's writes, so tailing through the same handle
+                # would read nothing.
+                out_fd, out_path = tempfile.mkstemp(prefix="promptaro-out-")
+                err_fd, err_path = tempfile.mkstemp(prefix="promptaro-err-")
+                out_w = os.fdopen(out_fd, "wb")
+                err_w = os.fdopen(err_fd, "wb")
+                try:
+                    proc = await _spawn(self.args(exe, text, s, st), cwd=self.cwd(s),
+                                        env=_worker_env(), stdin=stdin_src,
+                                        stdout=out_w, stderr=err_w)
+                finally:
+                    stdin_src.close()                   # the child keeps its own inherited handle
+                    out_w.close()
+                    err_w.close()
+            except Exception:
+                for p in (prompt_path, out_path, err_path):
+                    try:
+                        os.unlink(p)
+                    except (OSError, NameError):
+                        pass
+                raise
+            def feed_lines(raw_lines):
+                for line in raw_lines:
+                    line = line.decode(errors="replace").strip()
+                    if line.startswith("{"):
+                        try:
+                            self.handle(json.loads(line), st)
+                        except json.JSONDecodeError:
+                            continue
+            try:
+                waiter = asyncio.ensure_future(proc.wait())
+                tail = open(out_path, "rb")
+                buf = b""
+                while True:
+                    chunk = tail.read(1 << 16)         # what the child has written so far
+                    buf += chunk
+                    *lines, buf = buf.split(b"\n")
+                    feed_lines(lines)
+                    if waiter.done() and not chunk:
+                        feed_lines([buf])              # last line may lack a newline
+                        break
+                    if not chunk:
+                        await asyncio.sleep(0.05)
+                tail.close()
+                await waiter
+                err_bytes = Path(err_path).read_bytes()
+            except asyncio.CancelledError:
+                proc.terminate()
+                raise
+            except Exception as e:                                # spawn/stream failure: try the next option
+                store.emit(sid, "note", {"text": f"{LABEL[self.engine]} stopped unexpectedly "
+                                                 f"({type(e).__name__}). Trying the next option."})
+                return False
+            finally:
+                store.update(sid, state=st)
+                for p in (prompt_path, out_path, err_path):
+                    try:
+                        os.unlink(p)       # child is done; its handles are closed
+                    except OSError:
+                        pass
         except Exception as e:
+            try:
+                os.unlink(prompt_path)
+            except (OSError, NameError):
+                pass
             store.emit(sid, "note", {"text": f"{LABEL[self.engine]} couldn't start "
                                              f"({type(e).__name__}). Trying the next option."})
             return False
-        # Drain stderr concurrently — a full stderr pipe would deadlock the run.
-        err_task = asyncio.create_task(proc.stderr.read())
-        try:
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").strip()
-                if not line.startswith("{"):
-                    continue
-                try:
-                    self.handle(json.loads(line), st)
-                except json.JSONDecodeError:
-                    continue
-            await proc.wait()
-        except asyncio.CancelledError:
-            proc.terminate()
-            raise
-        except Exception as e:                                # spawn/stream failure: try the next option
-            store.emit(sid, "note", {"text": f"{LABEL[self.engine]} stopped unexpectedly "
-                                             f"({type(e).__name__}). Trying the next option."})
-            return False
-        finally:
-            store.update(sid, state=st)
-            if not err_task.done():
-                err_task.cancel()
 
         ok, summary, usage = self.outcome()
         err = ""
         if not ok:
-            err = (await err_task).decode(errors="replace")[-600:].strip()
+            err = err_bytes.decode(errors="replace")[-600:].strip()
         if usage:
             store.add_usage(sid, 0.0, usage.get("tokens_in", 0), usage.get("tokens_out", 0))   # included in plan
             self.desk.count_subscription_run(sid, usage)
@@ -365,7 +493,7 @@ class ClaudeCodeRun(_CliRun):
         return find_claude()
 
     def args(self, exe, text, s, st):
-        a = [exe, "-p", text, "--output-format", "stream-json", "--verbose", "--append-system-prompt", WORKER_NOTE]
+        a = [exe, "-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", WORKER_NOTE]
         if self.variant:
             a += ["--model", self.variant]
         if (s.get("approval") or "ask_risky") == "never_ask":
@@ -426,15 +554,20 @@ class CodexRun(_CliRun):
     def exe(self):
         return find_codex()
 
+    def stdin_text(self, text: str) -> str:
+        return f"{WORKER_NOTE}\n\n{text}"
+
     def args(self, exe, text, s, st):
         # workspace-write: may edit files inside the task's copy only; no network. `exec` never stops to ask.
-        common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"']
+        # `-` reads the prompt from stdin (codex exec -): argv stays fixed, app-chosen flags only.
+        common = ["--json", "--skip-git-repo-check", "--sandbox", "workspace-write"]
         if self.variant:
             common += ["-m", self.variant]
-        prompt = f"{WORKER_NOTE}\n\n{text}"
         if st.get("codex_session"):
-            return [exe, "exec", "resume", *common, st["codex_session"], prompt]
-        return [exe, "exec", *common, prompt]
+            # resume's prompt positional is optional — omitted + piped stdin is the
+            # documented generic stdin path, safer than the `-` sentinel here.
+            return [exe, "exec", "resume", *common, st["codex_session"]]
+        return [exe, "exec", *common, "-"]
 
     def _call(self, item: dict) -> None:
         if item.get("id") in self.started:
@@ -554,7 +687,7 @@ class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
     engine = "claude_code"
 
     def args(self, exe, text, s, st):
-        a = [exe, "-p", text, "--output-format", "stream-json", "--verbose",
+        a = [exe, "-p", "--output-format", "stream-json", "--verbose",
              "--append-system-prompt", CHAT_NOTE]
         deny = list(CHAT_DENY)
         if s.get("project"):
@@ -577,9 +710,12 @@ class ClaudeChatRun(_ChatRun, ClaudeCodeRun):
 class CodexChatRun(_ChatRun, CodexRun):
     engine = "codex"
 
+    def stdin_text(self, text: str) -> str:
+        return f"{CHAT_NOTE}\n\n{text}"
+
     def args(self, exe, text, s, st):
         # read-only sandbox: can inspect the bound folder, can't change anything.
-        common = ["--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
+        common = ["--json", "--skip-git-repo-check", "--sandbox", "read-only"]
         if not s.get("project"):
             # Unbound chat: Codex's read-only sandbox can read the whole disk
             # (~/.ssh included), and it has no per-file deny rules — so it gets no
@@ -587,10 +723,9 @@ class CodexChatRun(_ChatRun, CodexRun):
             common += ["-c", "features.shell_tool=false", "-c", "features.unified_exec=false"]
         if self.variant:
             common += ["-m", self.variant]
-        prompt = f"{CHAT_NOTE}\n\n{text}"
         if st.get("codex_session"):
-            return [exe, "exec", "resume", *common, st["codex_session"], prompt]
-        return [exe, "exec", *common, prompt]
+            return [exe, "exec", "resume", *common, st["codex_session"]]
+        return [exe, "exec", *common, "-"]
 
 
 CHAT_RUNNERS = {"claude_code": ClaudeChatRun, "codex": CodexChatRun}

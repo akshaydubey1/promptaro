@@ -535,7 +535,16 @@ async def open_in(sid: str, b: OpenBody):
     mac = platform.system() == "Darwin"
     if b.app in ("code", "cursor"):
         exe = shutil.which(b.app)
-        if exe:
+        if exe and os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+            # VS Code / Cursor install as <App>\Code.exe with bin\code.cmd beside it.
+            # Run the real exe: the .cmd would need shell=True, and cmd would
+            # re-parse a project path like "R&D" as commands.
+            real = Path(exe).resolve().parent.parent / f"{b.app.capitalize()}.exe"
+            if real.exists():
+                subprocess.Popen([str(real), path])
+            else:
+                subprocess.Popen([exe, path], shell=True)
+        elif exe:
             subprocess.Popen([exe, path])
         elif mac:
             subprocess.Popen(["open", "-a", "Visual Studio Code" if b.app == "code" else "Cursor", path])
@@ -731,7 +740,7 @@ async def tool_pick_files():
     out, _ = await proc.communicate()
     if proc.returncode != 0:
         return {"paths": []}
-    return {"paths": [p for p in out.decode().splitlines() if p.strip()]}
+    return {"paths": [p for p in out.decode(errors="replace").splitlines() if p.strip()]}
 
 
 class ConvertBody(BaseModel):
@@ -819,7 +828,7 @@ async def pick_folder():
     out, _ = await proc.communicate()
     if proc.returncode != 0:
         return {"path": ""}
-    p = out.decode().strip()
+    p = out.decode(errors="replace").strip()
     return {"path": p.rstrip("/\\") if len(p) > 3 else p}
 
 

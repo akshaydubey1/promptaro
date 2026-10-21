@@ -272,7 +272,7 @@ class Workspace:
             raise ToolError(f"{path} does not exist")
         if p.stat().st_size > 2_000_000:
             raise ToolError(f"{path} is larger than 2 MB; use search instead")
-        lines = p.read_text(errors="replace").splitlines()
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         start = max(1, int(start or 1))
         end = min(len(lines), int(end) if end else start + READ_LINES - 1)
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))
@@ -302,7 +302,7 @@ class Workspace:
         p = self.path(path)
         existed = p.exists()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content if isinstance(content, str) else str(content))
+        p.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
         return ToolResult(True, f"{'Replaced' if existed else 'Created'} {self.rel(p)} ({len(content.splitlines())} lines)",
                           {"path": self.rel(p), "created": not existed})
 
@@ -310,13 +310,22 @@ class Workspace:
         p = self.path(path)
         if not p.is_file():
             raise ToolError(f"{path} does not exist")
-        text = p.read_text(errors="replace")
-        n = text.count(old) if old else 0
+        raw = p.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        try:
+            text = raw.decode("utf-8-sig" if bom else "utf-8")   # strict: a lossy rewrite would corrupt bytes
+        except UnicodeDecodeError:
+            raise ToolError(f"{path} isn't UTF-8 text — editing it would corrupt its contents")
+        old2, new2 = old, new
+        if "\r\n" in text:                                  # keep the file's own line endings —
+            norm = lambda s: s.replace("\r\n", "\n").replace("\n", "\r\n")   # or every line churns
+            old2, new2 = norm(old), norm(new)
+        n = text.count(old2) if old2 else 0
         if n == 0:
             raise ToolError("`old` text not found — read the file again and copy the snippet exactly")
         if n > 1:
             raise ToolError(f"`old` text appears {n} times — include more surrounding lines so it is unique")
-        p.write_text(text.replace(old, new, 1))
+        p.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.replace(old2, new2, 1).encode("utf-8"))
         return ToolResult(True, f"Edited {self.rel(p)}", {"path": self.rel(p)})
 
     # -------------------------------------------------------------- run

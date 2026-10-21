@@ -21,11 +21,14 @@ Download or clone this folder, then **double-click one file. Promptaro installs 
 | **Windows** | `promptaro/Install Promptaro.bat` | Adds **Promptaro** to the Start menu and desktop *and starts it*. From then on, click the shortcut. |
 | **Linux** | `promptaro/packaging/install-linux.sh` | Adds **Promptaro** to your app menu *and starts it*. |
 
+Works on macOS 11+ (Intel and Apple Silicon), Windows 10/11 and Linux.
+
 First start takes about a minute (it sets up its Python tools). Afterwards it opens instantly and keeps
 running in the background; **Connections → Quit Promptaro** stops it. No code needed anywhere — no
 terminal commands, no build steps.
 
 Want it without installing? `promptaro/Start Promptaro.command` / `.bat` (or `promptaro/launch.sh`) runs it in place.
+First use asks you to accept the **Terms of Use** — nothing works until you do.
 
 The two folders must stay side by side.
 
@@ -40,8 +43,8 @@ working alongside the new `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to o
 ## Tests
 
 ```bash
-cd smart-router && python -m pytest -q     # 101 tests
-cd promptaro && python -m pytest -q        # 75 tests
+cd smart-router && python -m pytest -q     # 103 tests
+cd promptaro && python -m pytest -q        # 135 tests
 ```
 
 ---

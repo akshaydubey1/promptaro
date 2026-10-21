@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import Scripted, act, wait_task
+from conftest import Scripted, act, fake_cli, wait_task
 from desk import workers
 
 FAKE = str(Path(__file__).with_name("fake_claude.py"))
@@ -18,7 +18,7 @@ HARD = ("Architect and implement a production-grade, thread-safe retry layer wit
 
 @pytest.fixture
 def claude(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", FAKE)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", fake_cli(Path(FAKE), tmp_path, "fake_claude"))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "claude_call.json"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-passed")
     monkeypatch.setattr(workers, "_status_cache", {})

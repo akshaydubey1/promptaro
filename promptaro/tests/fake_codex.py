@@ -11,7 +11,9 @@ if a[:2] == ["login", "status"]:
     print("Logged in using ChatGPT" if mode == "chatgpt" else "Logged in using an API key - sk-***", file=sys.stderr)
     sys.exit(0)
 if a[:1] == ["exec"]:
-    Path(os.environ["FAKE_CODEX_LOG"]).write_text(json.dumps({"argv": a, "has_api_key": "OPENAI_API_KEY" in os.environ}))
+    Path(os.environ["FAKE_CODEX_LOG"]).write_text(json.dumps(
+        {"argv": a, "stdin": sys.stdin.buffer.read().decode("utf-8"),
+         "has_api_key": "OPENAI_API_KEY" in os.environ}))
     out = lambda d: print(json.dumps(d), flush=True)
     out({"type": "thread.started", "thread_id": "thread-9"})
     out({"type": "turn.started"})
