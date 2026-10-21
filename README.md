@@ -1,51 +1,196 @@
-# Promptaro
+<p align="center">
+  <img src="promptaro/packaging/icon-256.png" alt="Promptaro" width="112">
+</p>
 
-**A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.**
+<h1 align="center">Promptaro</h1>
 
-Author: Akshay Dubey
+<p align="center">
+  <b>A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.</b><br>
+  The right AI for every task. Free first.
+</p>
 
-Every AI model, the right one for each task. This repository holds two parts that ship together:
+<p align="center">
+  <a href="LICENSE"><img alt="License: Proprietary" src="https://img.shields.io/badge/License-Proprietary-2e7d32.svg?style=for-the-badge"></a>
+  <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776ab.svg?style=for-the-badge&logo=python&logoColor=white"></a>
+  <img alt="macOS | Windows | Linux" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-supported-455a64.svg?style=for-the-badge">
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 238 passing" src="https://img.shields.io/badge/tests-238%20passing-ad1457.svg?style=for-the-badge&logo=pytest&logoColor=white"></a>
+  <img alt="Runs locally" src="https://img.shields.io/badge/runs-locally-00695c.svg?style=for-the-badge">
+  <img alt="Free models first" src="https://img.shields.io/badge/free%20models-first-bf4b00.svg?style=for-the-badge">
+</p>
 
-| Folder | What it is |
-|---|---|
-| [`promptaro/`](promptaro/README.md) | The desktop app: chat with any model, run coding agents on your repos, use free models from Claude Code, Aider and other coding tools, and see what smart routing saved. (Previously released as Tillwright — existing installs migrate automatically.) |
-| [`smart-router/`](smart-router/README.md) | The engine: picks the cheapest model expected to do each request well (in under a millisecond, no model call), tracks free-tier limits, escalates on failure, learns from results, and serves the local gateway for coding tools. |
+<p align="center">
+  <a href="#-quick-start">Quick Start</a> ·
+  <a href="#-what-you-get">Features</a> ·
+  <a href="#-how-it-works">How it works</a> ·
+  <a href="#-free-providers">Free providers</a> ·
+  <a href="#-coding-tools">Coding tools</a> ·
+  <a href="#-privacy-and-safety">Privacy</a>
+</p>
 
-## Run it — easiest path
+<p align="center">
+  <a href="docs/images/06-agent-run.png"><img src="docs/images/06-agent-run.png" alt="An agent fixing a bug on free models" width="860"></a><br>
+  <sub><i>An agent fixes a failing test for $0. When Groq hits its per-minute limit, Promptaro switches to NVIDIA on its own.</i></sub>
+</p>
 
-Download or clone this folder, then **double-click one file. Promptaro installs itself and opens in your browser.**
+---
+
+## ✨ What you get
+
+- **One app for every AI model.** Chat with Claude, GPT, Gemini, Llama, Qwen, DeepSeek and more, side by side, with answers streaming in as they're written.
+- **The right model for every message.** A built-in Smart Router scores each request in under a millisecond, without calling a model. Easy questions go to free models, everyday work to the cheapest model that does it well, and hard work to the strongest one.
+- **Free tokens first.** Plug in free keys from Groq, Cerebras and NVIDIA, and Promptaro tracks every per-minute, daily and monthly limit, moving to the next model before you ever see an error.
+- **Your existing plans, put to work.** Signed in to Claude Code or Codex CLI? Hard agent tasks run on your Claude or ChatGPT subscription instead of per-use billing.
+- **Coding agents you stay in control of.** Each agent works on its own git branch in a separate copy of your repo. It reads, edits and runs your tests, then waits for you to review the diff and merge.
+- **Free models inside your coding tools.** `promptaro-claude` and `promptaro-aider` start Claude Code and Aider on free models, with no setup.
+- **Every choice explained.** Each answer shows the model, Free or Paid, tokens and cost. **Why this model?** shows what was considered and how much was saved.
+- **Studio.** Generate images on free tiers, and convert PDFs, images, audio, video and documents locally.
+- **Install with one double-click** on Mac, Windows and Linux. No terminal, no build steps.
+
+## 🚀 Quick Start
+
+Download or clone this repository, then double-click one file. Promptaro installs itself and opens in your browser.
 
 | | Double-click this | What happens |
 |---|---|---|
-| **Mac** | `promptaro/Install Promptaro.command` | Installs **Promptaro.app** into Applications *and opens it*. From then on it's a normal app: Spotlight, Launchpad, Dock. (Not Apple-signed — if macOS refuses, right-click the file → **Open**.) |
-| **Windows** | `promptaro/Install Promptaro.bat` | Adds **Promptaro** to the Start menu and desktop *and starts it*. From then on, click the shortcut. |
-| **Linux** | `promptaro/packaging/install-linux.sh` | Adds **Promptaro** to your app menu *and starts it*. |
+| **Mac** | `promptaro/Install Promptaro.command` | Installs **Promptaro.app** into Applications and opens it. From then on it's a normal app: Spotlight, Launchpad, Dock. |
+| **Windows** | `promptaro/Install Promptaro.bat` | Adds **Promptaro** to the Start menu and desktop, and starts it. |
+| **Linux** | `promptaro/packaging/install-linux.sh` | Adds **Promptaro** to your app menu and starts it. |
 
-Works on macOS 11+ (Intel and Apple Silicon), Windows 10/11 and Linux.
+**Runs on** macOS 11 or newer (Intel and Apple Silicon), Windows 10/11 and Linux. The launcher installs and manages Python for you.
 
-First start takes about a minute (it sets up its Python tools). Afterwards it opens instantly and keeps
-running in the background; **Connections → Quit Promptaro** stops it. No code needed anywhere — no
-terminal commands, no build steps.
+The first start takes about a minute while it sets itself up. After that it opens instantly and keeps running in the background; **Connections → Quit Promptaro** stops it.
 
-Want it without installing? `promptaro/Start Promptaro.command` / `.bat` (or `promptaro/launch.sh`) runs it in place.
-First use asks you to accept the **Terms of Use** — nothing works until you do.
+> [!NOTE]
+> The Mac app isn't Apple-signed yet. If macOS refuses to open it, right-click the file and choose **Open**.
 
-The two folders must stay side by side.
+<details>
+<summary><b>Run it without installing</b></summary>
 
-## Migrating from Tillwright
+```
+promptaro/Start Promptaro.command      # Mac
+promptaro/Start Promptaro.bat          # Windows
+promptaro/launch.sh                    # Linux
+```
 
-First run moves `~/.akshay-router` and `~/.tillwright` into `~/.promptaro` (keys, settings,
-sessions, worktrees — existing `~/.promptaro` files are never overwritten), rewrites saved
-worktree paths, and still reads credentials from the old `akshay-smart-router` keychain
-entries. `tw-claude` / `tw-aider` / `tw-env` and the `tillwright-*` model aliases keep
-working alongside the new `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to opt out.
+The two folders, `promptaro/` and `smart-router/`, must stay side by side.
+</details>
 
-## Tests
+### First run
 
-```bash
+<p align="center">
+  <a href="docs/images/01-onboarding.png"><img src="docs/images/01-onboarding.png" alt="First-run setup" width="760"></a><br>
+  <sub><i>Setup shows each step's live status: sign in with OpenRouter, add free providers, and Promptaro finds your Claude or ChatGPT plan on its own.</i></sub>
+</p>
+
+## 🖼️ A quick tour
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/images/03-streaming.png"><img src="docs/images/03-streaming.png" alt="Chat"></a><br><sub><b>Chat.</b> Every answer shows which model wrote it, whether it was free, and the tokens used.</sub></td>
+    <td width="50%"><a href="docs/images/04-why.png"><img src="docs/images/04-why.png" alt="Why this model?"></a><br><sub><b>Why this model?</b> How hard the request looked, the models compared, and the money saved.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/images/07-review.png"><img src="docs/images/07-review.png" alt="Review and merge"></a><br><sub><b>Review.</b> See the agent's diff, then merge, open a pull request, or discard.</sub></td>
+    <td width="50%"><a href="docs/images/08-coding-tools.png"><img src="docs/images/08-coding-tools.png" alt="Coding tools"></a><br><sub><b>Coding tools.</b> Run Claude Code, Aider and more on free models.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/images/09-free-providers.png"><img src="docs/images/09-free-providers.png" alt="Free providers"></a><br><sub><b>Free providers.</b> Each one's limits, today's usage, and whether it may train on your prompts.</sub></td>
+    <td width="50%"><a href="docs/images/10-savings.png"><img src="docs/images/10-savings.png" alt="Savings"></a><br><sub><b>Savings.</b> Spent vs saved, and what the router has learned about each model.</sub></td>
+  </tr>
+</table>
+
+## 🧭 How it works
+
+```mermaid
+flowchart TD
+    A["Chat"] --> P
+    B["Agent task"] --> P
+    C["Claude Code / Aider"] --> P
+    P["Promptaro app<br/>runs on your computer"] --> R["Smart Router<br/>scores difficulty, picks the cheapest good model"]
+    R --> L["Free-limit ledger<br/>skips, waits, or switches on limits"]
+    L --> S["Your subscription<br/>hard agent work"]
+    L --> F["Free providers<br/>Groq · Cerebras · NVIDIA"]
+    L --> K["Paid keys<br/>last resort, capped"]
+    S --> O["Answer, diff to review, or merge<br/>model, cost and savings shown"]
+    F --> O
+    K --> O
+```
+
+If a model hits a limit or fails before it starts replying, the request moves to the next one, so you don't see an error. When an agent keeps failing, it moves one step up to a stronger model, never straight to the most expensive one.
+
+## 🆓 Free providers
+
+Add one free key per provider in **Connections**. Promptaro reads each provider's own rate-limit headers and pauses a provider when it says no.
+
+| Provider | Free tier | Trains on prompts? | Good for |
+|---|---|---|---|
+| [Groq](https://console.groq.com/keys) | 30 req/min, 1k req/day, 8k tokens/min per model | No | Very fast short requests |
+| [Cerebras](https://cloud.cerebras.ai/platform) | 5 req/min, 30k tokens/min, 1M tokens/day per model | No | Fastest inference, big daily allowance |
+| [NVIDIA NIM](https://build.nvidia.com/settings/api-keys) | 40 req/min per account | No | Large open models (Qwen Coder, Kimi, DeepSeek) |
+| [Mistral](https://console.mistral.ai/api-keys) | 60 req/min | May train | Chats only, unless you allow code |
+| [Codestral](https://console.mistral.ai/codestral) | 30 req/min, 2k req/day | May train | Chats only, unless you allow code |
+| [Cohere](https://dashboard.cohere.com/api-keys) | 1k req/month, non-commercial | No | Occasional use |
+| [OpenRouter](https://openrouter.ai) | 50 free req/day (1k after a one-time $10 top-up) | Varies by model | Every model family in one sign-in |
+
+Together, Groq, Cerebras and NVIDIA give roughly 2–4 million private tokens a day. Limits change; the app shows the date each one was checked.
+
+**Custom endpoints:** add any OpenAI-compatible API by base URL (Ollama, LM Studio, vLLM or a company proxy). Ollama running on your computer is picked up automatically.
+
+## 💻 Coding tools
+
+Open **Coding tools** in the sidebar and click **Add promptaro-claude, promptaro-aider and promptaro-env** once. Then, in any terminal:
+
+```
+promptaro-claude                 # Claude Code on free models
+promptaro-aider                  # Aider on free models
+eval "$(promptaro-env)"          # Any other tool: Cline, Continue, OpenCode, Zed
+```
+
+By default coding tools **never spend money**. Code only goes to providers that don't train on prompts unless you allow it.
+
+## 💳 Your subscriptions
+
+| Plan | Tool | How it's detected |
+|---|---|---|
+| Claude Pro / Max | **Claude Code** | `claude auth status` shows a Claude account sign-in |
+| ChatGPT Plus / Pro / Business | **Codex CLI** | `codex login status` shows "Logged in using ChatGPT" |
+
+When either is signed in, hard agent tasks run on that plan. If a plan hits its usage limit, Promptaro rests it for an hour and hands the work to the other plan or the regular models. Promptaro never reads or stores either login.
+
+## 🔒 Privacy and safety
+
+- **Runs on your computer.** The app listens on `127.0.0.1` only and refuses requests from websites.
+- **Keys stay in your system keychain** and are never shown again.
+- **Credential files are off limits.** `.env` files, SSH keys and certificates are never shown to any model.
+- **Agents can't escape their folder.** They work on their own branch in a separate copy, and risky commands wait for your **Allow**.
+- **Spending caps.** Each agent task has a dollar budget, and a daily cap covers all paid use.
+
+## 📁 Repository layout
+
+| Folder | What it is |
+|---|---|
+| [`promptaro/`](promptaro/README.md) | The desktop app: chat, agents, review, Studio, launchers and installers. |
+| [`smart-router/`](smart-router/README.md) | The engine: model scoring, free-limit ledger, failover, learning, and the local gateway for coding tools. |
+
+<details>
+<summary><b>Run the tests</b></summary>
+
+```
 cd smart-router && python -m pytest -q     # 103 tests
 cd promptaro && python -m pytest -q        # 135 tests
 ```
 
----
-Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+Every push runs both suites on macOS, Windows and Linux with Python 3.12 and 3.13.
+</details>
+
+<details>
+<summary><b>Coming from Tillwright?</b></summary>
+
+Promptaro was previously called Tillwright. The first run moves `~/.tillwright` and `~/.akshay-router` into `~/.promptaro` (keys, settings, sessions and worktrees) without overwriting anything. The old `tw-claude`, `tw-aider` and `tw-env` commands keep working. Set `PROMPTARO_NO_MIGRATE=1` to opt out.
+</details>
+
+## 📄 License
+
+Copyright © 2026 Akshay Dubey. All rights reserved. Proprietary; see [LICENSE](LICENSE).
+
+Promptaro is an independent project and isn't affiliated with Anthropic, OpenAI, Google or any model provider. Product names belong to their owners.
