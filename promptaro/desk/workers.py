@@ -389,12 +389,67 @@ class _CliRun:
         try:
             prompt_path, stdin_src = _prompt_file(self.stdin_text(text))
             try:
-                proc = await _spawn(self.args(exe, text, s, st), cwd=self.cwd(s),
-                                    env=_worker_env(), stdout=asyncio.subprocess.PIPE,
-                                    stderr=asyncio.subprocess.PIPE, stdin=stdin_src,
-                                    limit=16 * 1024 * 1024)
+                # Separate read handle — an inherited fd shares its file offset
+                # with the child's writes, so tailing through the same handle
+                # would read nothing.
+                out_fd, out_path = tempfile.mkstemp(prefix="promptaro-out-")
+                err_fd, err_path = tempfile.mkstemp(prefix="promptaro-err-")
+                out_w = os.fdopen(out_fd, "wb")
+                err_w = os.fdopen(err_fd, "wb")
+                try:
+                    proc = await _spawn(self.args(exe, text, s, st), cwd=self.cwd(s),
+                                        env=_worker_env(), stdin=stdin_src,
+                                        stdout=out_w, stderr=err_w)
+                finally:
+                    stdin_src.close()                   # the child keeps its own inherited handle
+                    out_w.close()
+                    err_w.close()
+            except Exception:
+                for p in (prompt_path, out_path, err_path):
+                    try:
+                        os.unlink(p)
+                    except (OSError, NameError):
+                        pass
+                raise
+            def feed_lines(raw_lines):
+                for line in raw_lines:
+                    line = line.decode(errors="replace").strip()
+                    if line.startswith("{"):
+                        try:
+                            self.handle(json.loads(line), st)
+                        except json.JSONDecodeError:
+                            continue
+            try:
+                waiter = asyncio.ensure_future(proc.wait())
+                tail = open(out_path, "rb")
+                buf = b""
+                while True:
+                    chunk = tail.read(1 << 16)         # what the child has written so far
+                    buf += chunk
+                    *lines, buf = buf.split(b"\n")
+                    feed_lines(lines)
+                    if waiter.done() and not chunk:
+                        feed_lines([buf])              # last line may lack a newline
+                        break
+                    if not chunk:
+                        await asyncio.sleep(0.05)
+                tail.close()
+                await waiter
+                err_bytes = Path(err_path).read_bytes()
+            except asyncio.CancelledError:
+                proc.terminate()
+                raise
+            except Exception as e:                                # spawn/stream failure: try the next option
+                store.emit(sid, "note", {"text": f"{LABEL[self.engine]} stopped unexpectedly "
+                                                 f"({type(e).__name__}). Trying the next option."})
+                return False
             finally:
-                stdin_src.close()        # the child keeps its own inherited handle
+                store.update(sid, state=st)
+                for p in (prompt_path, out_path, err_path):
+                    try:
+                        os.unlink(p)       # child is done; its handles are closed
+                    except OSError:
+                        pass
         except Exception as e:
             try:
                 os.unlink(prompt_path)
@@ -403,38 +458,11 @@ class _CliRun:
             store.emit(sid, "note", {"text": f"{LABEL[self.engine]} couldn't start "
                                              f"({type(e).__name__}). Trying the next option."})
             return False
-        # Drain stderr concurrently — a full stderr pipe would deadlock the run.
-        err_task = asyncio.create_task(proc.stderr.read())
-        try:
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").strip()
-                if not line.startswith("{"):
-                    continue
-                try:
-                    self.handle(json.loads(line), st)
-                except json.JSONDecodeError:
-                    continue
-            await proc.wait()
-        except asyncio.CancelledError:
-            proc.terminate()
-            raise
-        except Exception as e:                                # spawn/stream failure: try the next option
-            store.emit(sid, "note", {"text": f"{LABEL[self.engine]} stopped unexpectedly "
-                                             f"({type(e).__name__}). Trying the next option."})
-            return False
-        finally:
-            store.update(sid, state=st)
-            if not err_task.done():
-                err_task.cancel()
-            try:
-                os.unlink(prompt_path)   # child is done; its handle is closed
-            except OSError:
-                pass
 
         ok, summary, usage = self.outcome()
         err = ""
         if not ok:
-            err = (await err_task).decode(errors="replace")[-600:].strip()
+            err = err_bytes.decode(errors="replace")[-600:].strip()
         if usage:
             store.add_usage(sid, 0.0, usage.get("tokens_in", 0), usage.get("tokens_out", 0))   # included in plan
             self.desk.count_subscription_run(sid, usage)
