@@ -310,16 +310,22 @@ class Workspace:
         p = self.path(path)
         if not p.is_file():
             raise ToolError(f"{path} does not exist")
+        raw = p.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
         try:
-            text = p.read_text(encoding="utf-8")          # strict: errors="replace" then a
-        except UnicodeDecodeError:                        # rewrite would corrupt non-UTF-8 bytes
+            text = raw.decode("utf-8-sig" if bom else "utf-8")   # strict: a lossy rewrite would corrupt bytes
+        except UnicodeDecodeError:
             raise ToolError(f"{path} isn't UTF-8 text — editing it would corrupt its contents")
-        n = text.count(old) if old else 0
+        old2, new2 = old, new
+        if "\r\n" in text:                                  # keep the file's own line endings —
+            norm = lambda s: s.replace("\r\n", "\n").replace("\n", "\r\n")   # or every line churns
+            old2, new2 = norm(old), norm(new)
+        n = text.count(old2) if old2 else 0
         if n == 0:
             raise ToolError("`old` text not found — read the file again and copy the snippet exactly")
         if n > 1:
             raise ToolError(f"`old` text appears {n} times — include more surrounding lines so it is unique")
-        p.write_text(text.replace(old, new, 1), encoding="utf-8")
+        p.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.replace(old2, new2, 1).encode("utf-8"))
         return ToolResult(True, f"Edited {self.rel(p)}", {"path": self.rel(p)})
 
     # -------------------------------------------------------------- run

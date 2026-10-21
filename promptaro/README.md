@@ -28,7 +28,8 @@ by the launcher — you don't need anything pre-installed except a browser.
 
 The first start installs what it needs (about a minute). It opens in its own window if Chrome, Edge or Brave is
 installed, otherwise in your browser. It keeps running in the background after the window closes, so it opens
-instantly next time; **Connections → Quit Promptaro** stops it.
+instantly next time; **Connections → Quit Promptaro** stops it. First use asks you to accept the **Terms of Use** —
+nothing works until you do (§ Terms in the sidebar re-opens them).
 
 **First run** shows three steps, each with its live status:
 1. **Sign in with OpenRouter** — a free account that unlocks every model family and 50 free requests a day.
@@ -50,7 +51,7 @@ instantly next time; **Connections → Quit Promptaro** stops it.
 | **Works without AI** | Review, running commands in a task's copy, commit, merge, PR and discard are all plain code and work with nothing connected. |
 | **Project chat** | Bind a chat to a folder and the model reads your code (list/read/search only — it can never change or run anything) to ground its answers. |
 | **Your conversations** | Hover ✕ on any sidebar item to delete it; the header's ✕ just closes the view, and ⤓ downloads the whole conversation as Markdown (or `?format=json` for the raw events). |
-| **Studio** | Generate images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI and Cloudflare keys (optional), plus Pollinations which needs no key — tried best-first. Convert files locally: make or combine PDFs, and convert images, audio, video and documents between formats. Files never leave your Mac. |
+| **Studio** | Generate images and short videos on free tiers — Google AI Studio, Hugging Face, Together AI and Cloudflare keys (optional), plus Pollinations which needs no key — tried best-first. Convert files locally: make or combine PDFs, and convert images, audio, video and documents between formats. Files never leave your computer. |
 
 ## Free tokens for your coding tools
 
@@ -98,12 +99,15 @@ Promptaro checks this computer for the two official coding tools that run on a p
 When either is signed in, **hard agent tasks** run on that plan instead of per-use API billing. If a plan hits its
 usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to the regular models if
 neither has room. Nothing to configure: Connections shows what was detected, and the Model menu lets you pick a
-plan — or a specific model under it (Claude Sonnet/Opus/Haiku, GPT-5 Codex/GPT-5/Codex mini) — for a task.
+plan — or a specific model under it (Claude Sonnet/Opus/Haiku and pinned generations, the GPT-5.x Codex family) —
+for a task or a chat. A chat picked this way answers **read-only** on your plan: no writes, edits or commands, and
+credential files are denied in the tool's own permission language.
 
 Promptaro never reads or stores either login. It runs the unmodified `claude` or `codex` program in the task's
-own branch and shows its progress. Claude Code may only edit files and run tests and linters on its own (pushes,
-deletes, network and deploy commands are refused). Codex runs in its `workspace-write` sandbox: it can change files
-inside the task's copy only, with no network.
+own branch, feeds it the prompt over standard input (never the command line), and shows its progress. Claude Code
+may only edit files and run tests and linters on its own (pushes, deletes, network and deploy commands are
+refused). Codex runs in its `workspace-write` sandbox: it can change files inside the task's copy only, with no
+network.
 
 ## Free models and their limits
 
@@ -127,6 +131,7 @@ use paid models unless you choose **Chats and agents**.
 ## Safety
 
 - File tools can't leave the task's folder (`../`, absolute paths and symlinks pointing outside are refused), and `.git` is off limits.
+- Credential files (`.env*`, `*.env`, `~/.ssh`, key/certificate files) are blocked from the model — in Promptaro's own tools *and* in the plan tools' permission rules.
 - Commands run with API keys, tokens and passwords removed from their environment, and with a timeout.
 - The server listens on `127.0.0.1` only, rejects requests addressed to other host names, and requires an app header on every change, so a website can't drive it.
 - Cache and build junk (`__pycache__`, `node_modules`, `.terraform`, …) never shows up in reviews or commits.
@@ -151,7 +156,7 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 75 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 135 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
 
 ## Migrating from Tillwright
@@ -168,7 +173,7 @@ alongside the `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to opt out, and
 | Problem | What to do |
 |---|---|
 | macOS says the app is damaged/can't be opened | Right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/Promptaro.app` (it isn't Apple-signed) |
-| `promptaro-claude: command not found` | Coding tools → re-run the launcher install, then add `~/.local/bin` to PATH (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`) |
+| `promptaro-claude: command not found` | Coding tools → re-run the launcher install. Mac/Linux: add `~/.local/bin` to PATH (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`). Windows: the installer already adds `%USERPROFILE%\.promptaro\bin` — open a new terminal. |
 | Old sessions or keys seem missing | Check `~/.promptaro` — migration moves them from `~/.tillwright`/`~/.akshay-router`. Set `TILLWRIGHT_LEGACY_HOME`/`AKSHAY_ROUTER_LEGACY_HOME` if they lived elsewhere. |
 | "Not a git repository" starting an agent | Choose **Set it up with git** in the task dialog, or `git init` the folder first |
 | No models / "add a key" | Connections → sign in with OpenRouter, or paste a provider key; Ollama is detected when running |

@@ -123,16 +123,32 @@ def test_chat_pick_uses_the_plan(client, claude, repo):
     assert "Read(**/.env*)" in denied and "Read(~/.ssh/**)" in denied
 
 
-def test_prompt_travels_over_stdin_not_argv(client, claude):
-    """Quotes/&/% in a prompt must arrive byte-identical — on Windows a .cmd shim
-    re-parses the command line, where they'd run as commands (BatBadBut)."""
+@pytest.mark.parametrize("hostile", [
+    'Fix the "a & b" bug %PATH%',                          # the classic BatBadBut payload
+    "bang ! and caret ^ chars",                            # cmd escapes/delayed expansion
+    "a prompt with\na line break",
+    "हिंदी में सवाल 🚀 emoji",                            # non-ASCII must survive UTF-8 piping
+    "x" * 9000,                                            # > cmd's 8191-char limit — stdin only
+])
+def test_prompt_travels_over_stdin_not_argv(client, claude, hostile):
+    """Hostile/long prompts must arrive byte-identical — on Windows a .cmd shim
+    re-parses the command line, where metacharacters would run as commands."""
     sid = client.post("/api/sessions", json={"model": "claude-code"}, headers=H).json()["id"]
-    hostile = 'Fix the "a & b" bug %PATH%'
     client.post(f"/api/sessions/{sid}/messages", json={"text": hostile}, headers=H)
     wait_answer(client, sid, 1)
     call = json.loads(claude.read_text())
     assert call["stdin"] == hostile                        # exact bytes, un-escaped
-    assert hostile not in call["argv"] and "hi" not in call["argv"]
+    assert hostile not in call["argv"]
+
+
+def test_cmd_fallback_refuses_metachar_args(monkeypatch):
+    """The quoted-cmd fallback can't safely carry % ! ^ or a quote — refuse, don't hope."""
+    monkeypatch.setattr(workers.os, "name", "nt")
+    monkeypatch.setattr(workers, "_resolve_cmd_shim", lambda s: None)
+    assert workers._spawn_plan(["C:\\npm\\claude.cmd", "-p"]).startswith('"')
+    for bad in ("a%PATH%b", "a!b", "a^b", 'a"b'):
+        with pytest.raises(RuntimeError):
+            workers._spawn_plan(["C:\\npm\\claude.cmd", bad])
 
 
 def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):

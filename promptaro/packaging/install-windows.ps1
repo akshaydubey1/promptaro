@@ -22,6 +22,13 @@ $userPath = [string]$envKey.GetValue("Path", "", [Microsoft.Win32.RegistryValueO
 if (-not ($userPath -split ";" | Where-Object { $_ -ieq $bin })) {
   $newPath = if ($userPath) { $userPath.TrimEnd(";") + ";" + $bin } else { $bin }
   $envKey.SetValue("Path", $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+  # Tell Windows the environment changed, or only apps restarted after logout see it.
+  try {
+    $sig = '[DllImport("user32.dll")] public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.IntPtr lpdwResult);'
+    $w = Add-Type -MemberDefinition $sig -Name PromptaroNative -Namespace Win32 -PassThru
+    $res = [System.IntPtr]::Zero
+    $w.SendMessageTimeout([System.IntPtr]0xffff, 0x1A, [System.IntPtr]::Zero, "Environment", 2, 1000, [ref]$res) | Out-Null
+  } catch {}
   Write-Host "Added $bin to your PATH (new terminals pick it up — promptaro-claude etc.)."
 }
 $envKey.Close()

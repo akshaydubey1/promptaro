@@ -114,6 +114,12 @@ def _find(env_vars: str | tuple, name: str, extra: list) -> str | None:
         override = os.environ.get(env_var)
         if override:                                       # an explicit override wins, or disables
             return override if Path(override).exists() else None
+    if os.name == "nt":
+        # A real .exe (native installer) beats any .cmd/.bat shim — no parsing,
+        # no shell in between, no reparse risk.
+        exe = shutil.which(name + ".exe")
+        if exe:
+            return exe
     for c in (shutil.which(name), *extra):
         if c and Path(c).exists() and os.access(c, os.X_OK):
             return str(c)
@@ -174,6 +180,12 @@ def _spawn_plan(argv: list[str]) -> list[str] | str:
     direct = _resolve_cmd_shim(argv[0])
     if direct:
         return [*direct, *argv[1:]]
+    # Fallback: a fully-quoted cmd line. Quotes neutralise & | ( ) but NOT %VAR%
+    # expansion (works inside quotes), ! (if delayed expansion is on), ^ or an
+    # embedded " — so any fixed arg containing one refuses to launch this way.
+    if any(c in a for a in argv for c in "%!^\""):
+        raise RuntimeError(f"won't launch {Path(argv[0]).name} through cmd.exe — "
+                           "a fixed argument contains %, !, ^ or a quote")
     return " ".join(f'"{a}"' for a in argv)
 
 
@@ -509,7 +521,9 @@ class CodexRun(_CliRun):
         if self.variant:
             common += ["-m", self.variant]
         if st.get("codex_session"):
-            return [exe, "exec", "resume", *common, st["codex_session"], "-"]
+            # resume's prompt positional is optional — omitted + piped stdin is the
+            # documented generic stdin path, safer than the `-` sentinel here.
+            return [exe, "exec", "resume", *common, st["codex_session"]]
         return [exe, "exec", *common, "-"]
 
     def _call(self, item: dict) -> None:
@@ -667,7 +681,7 @@ class CodexChatRun(_ChatRun, CodexRun):
         if self.variant:
             common += ["-m", self.variant]
         if st.get("codex_session"):
-            return [exe, "exec", "resume", *common, st["codex_session"], "-"]
+            return [exe, "exec", "resume", *common, st["codex_session"]]
         return [exe, "exec", *common, "-"]
 
 

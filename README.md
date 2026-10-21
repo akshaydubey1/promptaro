@@ -28,6 +28,7 @@ running in the background; **Connections → Quit Promptaro** stops it. No code 
 terminal commands, no build steps.
 
 Want it without installing? `promptaro/Start Promptaro.command` / `.bat` (or `promptaro/launch.sh`) runs it in place.
+First use asks you to accept the **Terms of Use** — nothing works until you do.
 
 The two folders must stay side by side.
 
@@ -42,8 +43,8 @@ working alongside the new `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to o
 ## Tests
 
 ```bash
-cd smart-router && python -m pytest -q     # 101 tests
-cd promptaro && python -m pytest -q        # 75 tests
+cd smart-router && python -m pytest -q     # 103 tests
+cd promptaro && python -m pytest -q        # 135 tests
 ```
 
 ---
