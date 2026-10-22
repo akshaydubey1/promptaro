@@ -127,6 +127,10 @@ Each provider's own free tier, as recorded in `smart-router/router/free_provider
 | Cohere | 20 requests/minute, 1,000/month — trial key, non-commercial use only | no |
 | Gemini (AI Studio free tier) | 10 requests/minute, 250/day, 250,000 tokens/minute — per model | yes |
 
+> **Cohere trial keys are non-commercial.** Promptaro's licence allows small businesses to use
+> the app commercially, but Cohere's trial tier does not — if you use Promptaro for work, skip
+> the Cohere key or use a paid Cohere key instead.
+
 Providers that may train on prompts are only used for code when **Chats and code: any free
 model** is chosen; the private-by-default providers (Groq, Cerebras, NVIDIA, Cohere) carry code
 without that switch.
