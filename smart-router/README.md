@@ -26,8 +26,9 @@ instruction ─► classify ─► choose model + ladder ─► pick skills ─�
 | Check quality | `router/checks.py` | Empty/truncated/refusal checks; JSON validity; Python syntax and no placeholder bodies; **pytest runs** for code (generated tests or tests you supply); source links for research. Cross-model review only for high-complexity work that tests can't verify (`cross_review: auto`). |
 | Escalate intelligently | `router/engine.py` | Climbs the ladder one step at a time (next-stronger model, or a similar-strength model from another provider), ending at the strongest. Hard tasks start on a strong model immediately. Respects `max_cost_usd`. |
 | Improve routing | `router/store.py` | Every attempt is recorded (pass/fail, cost, latency, tokens) in SQLite, and so is human feedback (`Store.feedback`, worth 3 automatic checks each). Expected quality, latency and output length per model × task type × complexity update from real results. `GET /v1/stats` shows them. |
-| Free allowance | `router/catalog.py` (`FreeQuota`) | Reads OpenRouter's daily free-request allowance, counts down locally, and pauses free models after a 429 (a minute, or until midnight UTC when the day's allowance is gone); paid models fill in. |
+| Free allowance | `router/catalog.py` (`FreeQuota`) | Reads OpenRouter's daily free-request allowance, counts down locally, and pauses free models after a 429 (a minute, or until midnight UTC when the day's allowance is gone); other free providers fill in. |
 | Free providers | `router/free_providers.py` | Groq, Cerebras, NVIDIA NIM, Mistral, Codestral, Cohere, Gemini free tier: dated free limits, key prefixes, privacy flags, model picks discovered live. |
+| No-spend default | `router/catalog.py`, `router/selector.py` | Paid per-use models are skipped unless `allow_paid` is on; escalation, reviews and named picks follow the same rule, and `NoFreeModel` explains when nothing free is left. |
 | Free-tier ledger | `router/quota.py` | Requests/tokens per minute, day, month per provider or model; live rate-limit headers; pauses only the refusing model; refuses requests that can't fit; computes the wait for per-minute limits. |
 | Coding-tools gateway | `router/gateway.py` | `/v1/messages` (Anthropic, streaming + tools + images), `/v1/chat/completions`, `/v1/models`, `count_tokens`. Token-protected, free-only by default, failover before the first byte, tool-call arguments repaired. |
 | Streaming | `router/providers.py` | `Provider.stream()` for Anthropic and OpenAI-compatible APIs; `Router.run(..., on_delta=...)` streams each attempt. |
@@ -109,7 +110,7 @@ The model call itself dominates total time; routing is noise next to it.
 ## Tests
 
 ```bash
-python -m pytest -q     # 103 tests, fully offline (mocked providers and sign-in)
+python -m pytest -q     # 112 tests, fully offline (mocked providers and sign-in)
 ```
 
 ---

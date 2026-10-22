@@ -84,8 +84,8 @@ The gateway listens on 127.0.0.1 only and every request needs its token (kept in
 the launchers at run time, never written into them). Codex CLI isn't supported yet (it needs the Responses API).
 
 What realistic free use looks like: Groq + Cerebras + NVIDIA give roughly 2–4 million private tokens a day, about
-80–150 Claude Code turns. Open models are weaker than Claude at Claude Code's edit format, so hard tasks may need a
-paid model; every request shows which model answered.
+80–150 Claude Code turns. Open models are weaker than Claude at Claude Code's edit format, so the hardest tasks
+are better run on your Claude plan; every request shows which model answered.
 
 ## Uses the subscriptions you already pay for
 
@@ -97,7 +97,7 @@ Promptaro checks this computer for the two official coding tools that run on a p
 | ChatGPT Plus / Pro / Business | **Codex CLI** | `codex login status` reports "Logged in using ChatGPT" |
 
 When either is signed in, **hard agent tasks** run on that plan instead of per-use API billing. If a plan hits its
-usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to the regular models if
+usage limit, Promptaro rests it for an hour and hands the task to the other plan, or to free models if
 neither has room. Nothing to configure: Connections shows what was detected, and the Model menu lets you pick a
 plan — or a specific model under it (Claude Sonnet/Opus/Haiku and pinned generations, the GPT-5.x Codex family) —
 for a task or a chat. A chat picked this way answers **read-only** on your plan: no writes, edits or commands, and
@@ -111,12 +111,21 @@ network.
 
 ## Free models and their limits
 
+## Spending: $0 by default
+
+Promptaro never spends money unless you turn that on. With no subscription it uses free models only. With a Claude
+or ChatGPT plan, everyday chats use free models and hard questions, or questions free models couldn't answer, go to
+your plan, at no extra cost. Paid per-use models (OpenRouter credit, API keys) are locked in the model menu until you
+tick **Allow paid models** in Connections; then a daily cap (starting at $1) limits them. If a free answer fails its
+checks, Promptaro tries another free model or your plan, never a paid one. If every free limit is used up and no plan
+is signed in, the chat says when limits reset instead of spending.
+
 Free models come from OpenRouter. OpenRouter allows **20 requests a minute** and **50 a day**, or **1000 a day** once
 $10 of credit has ever been bought. Promptaro reads your allowance from OpenRouter, counts down as you use it, and
 shows "Free requests left today" in Connections and Savings. When the allowance runs out or a free model is
-rate-limited, routing skips free models (until midnight UTC, or for a minute) and paid models fill in with no error.
-By default free models are used for chats only, since some free providers may keep prompts; agents on private code
-use paid models unless you choose **Chats and agents**.
+rate-limited, routing skips those models (until midnight UTC, or for a minute) and moves to your other free providers
+or your plan. Code (agents, project chats, coding tools) only goes to free providers that don't train on prompts,
+unless you choose **Chats and code: any free model**.
 
 ## How it saves tokens and money
 
@@ -156,7 +165,7 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 135 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 140 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
 
 ## Migrating from Tillwright
@@ -177,7 +186,7 @@ alongside the `promptaro-*` names. Set `PROMPTARO_NO_MIGRATE=1` to opt out, and
 | Old sessions or keys seem missing | Check `~/.promptaro` — migration moves them from `~/.tillwright`/`~/.akshay-router`. Set `TILLWRIGHT_LEGACY_HOME`/`AKSHAY_ROUTER_LEGACY_HOME` if they lived elsewhere. |
 | "Not a git repository" starting an agent | Choose **Set it up with git** in the task dialog, or `git init` the folder first |
 | No models / "add a key" | Connections → sign in with OpenRouter, or paste a provider key; Ollama is detected when running |
-| Free requests exhausted | Providers reset per minute and at midnight UTC — the ledger pauses and moves on; paid models only fill in if spending is allowed |
+| Free requests exhausted | Providers reset per minute and at midnight UTC: the ledger pauses and moves on to other free providers or your plan. Paid models are only used if you allowed them |
 | Agent stopped at budget | Raise the task's dollar cap (or the daily cap in Connections) and send "continue" |
 | Something crashed | `~/.promptaro/promptaro.log`; the app auto-offers **Restart now** after a code update |
 

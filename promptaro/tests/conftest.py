@@ -14,6 +14,8 @@ import pytest
 import yaml
 
 os.environ.setdefault("PROMPTARO_NO_MIGRATE", "1")   # never move real ~/.tillwright in tests
+# Most tests exercise routing across paid models; tests of the real default (paid off) unset this.
+os.environ.setdefault("PROMPTARO_ALLOW_PAID", "1")
 
 HERE = Path(__file__).resolve().parent
 ROUTER = Path(os.environ.get("SMART_ROUTER_ROOT", HERE.parent.parent / "smart-router")).resolve()

@@ -146,6 +146,7 @@ class SettingsBody(BaseModel):
     gateway_spend: str | None = Field(None, pattern="^(free|paid_ok)$")
     daily_budget_usd: float | None = Field(None, ge=0, le=10000)
     paid_media: bool | None = None        # let Studio use image models that may bill a key
+    allow_paid: bool | None = None        # may chats and agents use per-use paid models? off by default
 
 
 @api.post("/connect/settings")
@@ -154,7 +155,8 @@ async def save_settings(body: SettingsBody, request: Request):
     daily_budget_usd: hard daily cap on paid model spend across every surface; 0 = no cap.
     paid_media: opt in to image providers that can charge once free quotas run out."""
     d = catalog.set_settings(free_models=body.free_models, gateway_spend=body.gateway_spend,
-                             daily_budget_usd=body.daily_budget_usd, paid_media=body.paid_media)
+                             daily_budget_usd=body.daily_budget_usd, paid_media=body.paid_media,
+                             allow_paid=body.allow_paid)
     await asyncio.to_thread(_router(request).reload)
     return d
 

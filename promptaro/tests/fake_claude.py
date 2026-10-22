@@ -19,6 +19,11 @@ if "-p" in a:
         print("Error: usage limit reached", file=sys.stderr); sys.exit(1)
     out = lambda d: print(json.dumps(d), flush=True)
     out({"type": "system", "subtype": "init", "session_id": "sess-123"})
+    if not Path("calc.py").exists():                     # a chat turn (nothing to edit): just answer
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": "Plan answer."}]}})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "Plan answer.",
+             "usage": {"input_tokens": 300, "output_tokens": 40}, "session_id": "sess-123"})
+        sys.exit(0)
     out({"type": "assistant", "message": {"content": [{"type": "text", "text": "I'll fix add()."},
          {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "calc.py", "old_string": "a - b", "new_string": "a + b"}}]}})
     p = Path("calc.py"); p.write_text(p.read_text().replace("a - b", "a + b"))

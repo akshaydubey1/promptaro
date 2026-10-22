@@ -197,6 +197,8 @@ class Router:
             pool = [m for m in pool if not (m.extra.get("free") and m.extra.get("trains"))]
         if not self._allow_free(req):
             pool = [m for m in pool if not m.extra.get("free")]
+        if not catalog.paid_allowed():
+            pool = [m for m in pool if not catalog.costs_money(m)]     # helpers never spend money either
         return pool
 
     async def _maybe_llm_classify(self, req: RunRequest, profile: TaskProfile) -> TaskProfile:
@@ -303,6 +305,7 @@ class Router:
         spent = 0.0
         feedback = ""
         best: tuple[float, str, str] | None = None   # (score, text, model)
+        empty_retry: dict[str, bool] = {}
         blocked_by_budget = False
 
         for i, cand in enumerate(ladder):
@@ -345,13 +348,33 @@ class Router:
                     self.registry.breaker.record(m.id, False)
                 result.attempts.append(Attempt(m.id, False, 0.0, [], 0, 0, 0.0, 0.0,
                                                error=secrets.redact(str(e))[:300]))
-                if i == len(ladder) - 1 and free:
-                    # The last option was a free model that refused: try once more without free models.
-                    retry = route(self.registry, self.store, profile, prefer=req.prefer,
-                                  quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
-                                  allow_free=False, exclude=req.exclude, private=req.private)
-                    if retry.primary.model.id not in {c.model.id for c in ladder}:
-                        ladder.append(retry.primary)
+                if i == len(ladder) - 1 and free and catalog.paid_allowed():
+                    # The last option was a free model that refused: the person allows paid models,
+                    # so try once more without free ones. Never happens with paid models off.
+                    try:
+                        retry = route(self.registry, self.store, profile, prefer=req.prefer,
+                                      quality_override=req.quality_target, max_cost_usd=req.max_cost_usd,
+                                      allow_free=False, exclude=req.exclude, private=req.private)
+                        if retry.primary.model.id not in {c.model.id for c in ladder}:
+                            ladder.append(retry.primary)
+                    except RuntimeError:
+                        pass
+                continue
+
+            if not comp.text.strip() and comp.tokens_out and not empty_retry.get(m.id):
+                # A "thinking" model spent its whole allowance reasoning and returned no answer.
+                # That's not a quality failure: give the same model more room once (free models
+                # cost nothing) before moving on.
+                empty_retry[m.id] = True
+                ladder.insert(i + 1, cand)
+                max_out = min(max(max_out * 3, 4000), 16000)
+                result.attempts.append(Attempt(m.id, False, 0.0, ["no answer: it used its whole reply "
+                                                                   "allowance on hidden reasoning"],
+                                               comp.tokens_in, comp.tokens_out,
+                                               m.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens),
+                                               comp.latency_ms))
+                spent += result.attempts[-1].cost_usd
+                self.store.add_spend(result.attempts[-1].cost_usd)
                 continue
 
             cost = m.cost(comp.tokens_in, comp.tokens_out, comp.cached_tokens)

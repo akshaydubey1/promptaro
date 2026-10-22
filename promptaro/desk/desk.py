@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from pathlib import Path
 
 from router.classifier import classify
 from router.engine import Router, RunRequest
+from router.selector import NoFreeModel, route
 
 from . import gitops
 from .agent import AgentRun
@@ -17,6 +19,19 @@ from .tools import redact
 from .workers import HARD_TASK, RUNNERS, engine_of, usable_engines
 
 CHAT_HISTORY_TURNS = 8
+
+# The app's own help (~1k tokens) only rides along when the message is about Promptaro itself.
+_ABOUT_APP = re.compile(
+    r"\b(promptaro|tillwright|this app|the app|sidebar|connections?|coding tools|studio|agent tasks?|"
+    r"model menu|priority|savings|terms of use|launchers?|subscriptions?|free (models?|keys?|tokens?)|"
+    r"daily budget|paid models?|why this model|project chat|merge|worktree|"
+    r"(add|start|create|make|run|new) (a |an )?(new )?(agent|chat|project)s?|"
+    r"how (do|can|should) i (use|connect|add|start|stop|delete|export|merge|install|update|quit|sign))\b",
+    re.I)
+
+
+def about_app(text: str) -> bool:
+    return bool(_ABOUT_APP.search(text or ""))
 
 # Lets the chat answer questions about Promptaro itself accurately.
 APP_HELP = """You are the assistant inside Promptaro, a desktop app by Akshay Dubey. If the user asks how to use
@@ -43,7 +58,10 @@ Promptaro, answer from these facts only (don't invent features):
   base URL, with an optional key and a "Private" flag that lets code use it. Free providers (Groq, Cerebras,
   NVIDIA NIM, Mistral, Codestral, Cohere) each take one free key;
   Promptaro tracks each one's limits and shows what's left today. Providers that may train on prompts are only used
-  for chats unless the user allows them for code. A daily $ budget caps all paid spend.
+  for chats unless the user allows them for code.
+- Spending (Connections): Promptaro never spends money by default. It uses free models and the Claude or
+  ChatGPT plan the user already has. Paid per-use models (OpenRouter credit, API keys) stay off unless the user
+  ticks "Allow paid models"; then a daily $ cap (starting at $1) limits them.
 - Studio (sidebar): generates images and short videos on free tiers — Hugging Face, Together AI, Cloudflare
   Workers AI, and Pollinations which needs no key — best-first, and converts files locally: make or
   combine PDFs, convert images/audio/video/documents between formats. Nothing is uploaded anywhere.
@@ -55,11 +73,11 @@ Promptaro, answer from these facts only (don't invent features):
   By default coding tools only use free models (never spend money).
 - Hard agent tasks run automatically on the user's Claude subscription (through Claude Code) or ChatGPT
   subscription (through Codex CLI) when that tool is installed and signed in — no per-use charge; the plan's usage
-  limits apply, and when one plan hits its limit the other plan or the regular models take over. The Model menu
+  limits apply, and when one plan hits its limit the other plan or free models take over. The Model menu
   can also pick a specific model under a plan — Claude Opus/Sonnet/Haiku (latest aliases or pinned Opus 5 /
-  Sonnet 5) or Codex's GPT-5.x. A chat with a plan pick answers through that plan's tool, read-only. Easy chats use free
-  models (OpenRouter allows 50 free requests a day, or 1000 after buying $10 of credit once); other work uses the
-  cheapest paid model that can do it. Each answer shows the model, Free/Paid/Subscription, tokens used, and a
+  Sonnet 5) or Codex's GPT-5.x. A chat with a plan pick answers through that plan's tool, read-only. Auto chats use free
+  models for everyday questions (OpenRouter allows 50 free requests a day, or 1000 after buying $10 of credit
+  once) and the user's plan for hard questions or when free models can't answer, so nothing costs extra. Each answer shows the model, Free/Paid/Subscription, tokens used, and a
   "Why this model?" link with the options considered. Thumbs up/down teaches the router; thumbs down also offers
   "Try a stronger model". The Savings view (top bar) shows what smart routing saved.
 - Promptaro was previously called Tillwright; old settings, keys, sessions and `tw-*` launchers still work.
@@ -86,22 +104,32 @@ class Desk:
 
     # --------------------------------------------------------------- chat
     async def chat(self, sid: str, text: str, *, retry_of: int | None = None, exclude: tuple = ()) -> None:
+        """Answer a chat message without spending money: free models for everyday questions, the
+        person's own plan (Claude Code / Codex) for hard ones or when free models can't answer.
+        Paid per-use models only run if the person turned them on in Connections."""
         s = self.store.get(sid)
-        if engine_of(s.get("model") or "")[0]:           # a subscription pick: the plan's own tool answers
-            if await self._plan_chat(sid, text):
-                return
-            self.store.emit(sid, "note", {"text": "No signed-in plan could answer, so a regular "
-                                                  "model is answering instead."})
-        if s.get("project"):                            # a chat bound to a folder: read-only tools ground it
-            from .agent import ChatRun
-            await ChatRun(self, sid).run(text)
-            return
         past = [e for e in self.store.events(sid) if e["kind"] in ("user", "assistant")]
         if retry_of is not None:                         # history up to the question being retried
             past = [e for e in past if e["seq"] < retry_of]
         past = past[-CHAT_HISTORY_TURNS * 2:]
         ctx = "\n\n".join(f"{'User' if e['kind'] == 'user' else 'Assistant'}: {e['data'].get('text', '')}"
                           for e in past[:-1])  # last one is the message being answered
+        model = s.get("model") or ""
+        if engine_of(model)[0]:                          # a subscription pick: the plan's own tool answers
+            if await self._plan_chat(sid, text, ctx):
+                return
+            self.store.emit(sid, "note", {"text": "No signed-in plan could answer, so a free "
+                                                  "model is answering instead."})
+        plans = await usable_engines() if not model else []
+        if plans and (retry_of is not None or classify(text).complexity >= HARD_TASK):
+            # Hard question (or "try a stronger model"): your plan answers it, at no extra cost.
+            if await self._plan_chat(sid, text, ctx, reason="a harder question, so your plan answered it "
+                                                            "instead of a free model, at no extra cost"):
+                return
+        if s.get("project"):                            # a chat bound to a folder: read-only tools ground it
+            from .agent import ChatRun
+            await ChatRun(self, sid).run(text)
+            return
         self.store.update(sid, status="running")
         forced = m if (m := s.get("model")) and not engine_of(m)[0] else None
         prefer = "best" if retry_of is not None else (s.get("prefer") or "balanced")
@@ -125,12 +153,23 @@ class Desk:
                 buf.clear()
 
         try:
-            res = await self.router.run(RunRequest(
-                instruction=text, context=("Earlier in this conversation:\n" + ctx) if ctx else "",
-                prefer=prefer, force_model=forced, use_cache=not ctx and retry_of is None,
-                system_extra=APP_HELP, exclude=exclude), on_delta=on_delta)
+            try:
+                res = await self.router.run(RunRequest(
+                    instruction=text, context=("Earlier in this conversation:\n" + ctx) if ctx else "",
+                    prefer=prefer, force_model=forced, use_cache=not ctx and retry_of is None,
+                    system_extra=APP_HELP if about_app(text) else "", exclude=exclude), on_delta=on_delta)
+            except NoFreeModel as e:
+                if plans and await self._plan_chat(sid, text, ctx, reason="no free model was available "
+                                                   "right now, so your plan answered, at no extra cost"):
+                    return
+                self.store.emit(sid, "error", {"text": str(e)})
+                return
             if buf:
                 self.store.publish(sid, "delta", {"attempt": current[0], "text": "".join(buf)})
+            if not res.passed and not res.cached and plans and \
+                    await self._plan_chat(sid, text, ctx, reason="the free model's answer didn't pass the checks, "
+                                                                 "so your plan answered, at no extra cost"):
+                return
             tin = sum(a.tokens_in for a in res.attempts)
             tout = sum(a.tokens_out for a in res.attempts)
             self.store.add_usage(sid, res.total_cost, tin, tout)
@@ -162,14 +201,22 @@ class Desk:
         finally:
             self.store.update(sid, status="idle")
 
-    async def _plan_chat(self, sid: str, text: str) -> bool:
-        """A chat picked a plan model: the official tool answers read-only. False -> router."""
+    async def _plan_chat(self, sid: str, text: str, ctx: str = "", reason: str = "") -> bool:
+        """The person's plan answers this chat turn through its official tool, read-only.
+        False -> nothing signed in could answer (the caller falls back to free models)."""
         from .workers import CHAT_RUNNERS, usable_engines
-        wanted, _ = engine_of(self.store.get(sid).get("model") or "")
+        s = self.store.get(sid)
+        st = s.get("state") or {}
+        wanted, _ = engine_of(s.get("model") or "")
         plans = await usable_engines()
         for eng in dict.fromkeys([wanted, *plans]):
             if eng in plans and eng in CHAT_RUNNERS:
-                if await CHAT_RUNNERS[eng](self, sid).run(text):
+                resumes = st.get("claude_session" if eng == "claude_code" else "codex_session")
+                prompt = text if resumes or not ctx else \
+                    f"Earlier in this conversation:\n{ctx}\n\nUser's new message:\n{text}"
+                runner = CHAT_RUNNERS[eng](self, sid)
+                runner.reason = reason
+                if await runner.run(prompt):
                     return True
         return False
 
@@ -267,11 +314,25 @@ class Desk:
             plans = await usable_engines()
             if wanted and wanted in plans:
                 engine = wanted
-            elif plans and (wanted or classify(text).complexity >= HARD_TASK or s.get("prefer") == "best"):
-                engine = plans[0]
+            elif plans and (wanted or classify(text).complexity >= HARD_TASK or s.get("prefer") == "best"
+                            or not self._free_can_code(text)):
+                engine = plans[0]                         # hard work, or nothing free left: your plan
         st["engine"] = engine
         self.store.update(sid, state=st)
         return engine
+
+    def _free_can_code(self, text: str) -> bool:
+        """Is any free (or otherwise no-cost) model available for this coding task right now?"""
+        from router.catalog import get_settings
+        prof = classify(text)
+        prof.task_type = "coding"
+        mode = get_settings().get("free_models", "chat")
+        try:
+            route(self.router.registry, self.router.store, prof, allow_free=mode != "off",
+                  private=mode != "all")
+            return True
+        except RuntimeError:
+            return False
 
     def _spawn(self, sid: str, text: str) -> None:
         async def go():

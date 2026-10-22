@@ -166,7 +166,7 @@ def test_daily_budget_blocks_paid_models_when_used_up(make_router, monkeypatch):
     r, fake = make_router({"claude-haiku": ["Hello!"]})
     r.store.add_spend(1.0)
     monkeypatch.setattr(catalog, "get_settings",
-                        lambda: {"daily_budget_usd": 0.5, "free_models": "chat", "gateway_spend": "free"})
+                        lambda: {"daily_budget_usd": 0.5, "free_models": "chat", "gateway_spend": "free", "allow_paid": True})
     res = run(r, instruction="say hello", use_cache=False)
     assert not res.passed and "budget" in res.output
     assert fake.calls == []                            # nothing paid was even attempted

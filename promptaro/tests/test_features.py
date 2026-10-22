@@ -161,7 +161,7 @@ def test_chat_plan_failure_falls_back_with_note(client, claude, monkeypatch):
     a = [e for e in s["events"] if e["kind"] == "assistant"][0]["data"]
     assert a["model"] in ("small", "medium", "large") and not a.get("subscription")
     notes = [e["data"]["text"] for e in s["events"] if e["kind"] == "note"]
-    assert any("regular model" in n for n in notes)
+    assert any("free model" in n for n in notes)
 
 
 # --------------------------------------------------------------- project chat
@@ -589,3 +589,88 @@ def test_remote_endpoint_shows_untracked_cost(client, monkeypatch):
                 json={"label": "CorpEP", "base_url": "https://llm.corp.example/v1"})
     m = [m for m in client.get("/api/models").json() if m.get("via") == "CorpEP"][0]
     assert m["cost_note"] == "costs not tracked"
+
+
+# --------------------------------------------------------------- never spend money
+HARD_Q = ("Design and implement a distributed, multi-region rate limiter in Go with Redis: analyze consistency "
+          "trade-offs, prove correctness under network partitions, write the full implementation with tests, "
+          "benchmarks, and a step-by-step production migration and rollback plan")
+
+
+def _add_free(client, mid="free-one"):
+    from router.registry import ModelSpec
+    client.desk.router.registry.models[mid] = ModelSpec(
+        id=mid, provider="anthropic", model=mid, tier=1, context_window=200000, capabilities={"json", "tools"},
+        price_in=0, price_out=0, latency_ms_p50=900, prior={k: 0.85 for k in
+        ["coding", "research", "writing", "document", "data", "chat"]}, api_key_env="ANTHROPIC_API_KEY",
+        extra={"free": True, "trains": False, "name": "Free one", "via": "free provider"})
+
+
+def _paid_off(monkeypatch):
+    monkeypatch.delenv("PROMPTARO_ALLOW_PAID", raising=False)
+    catalog.set_settings(allow_paid=False)              # the real default, even if a test persisted it
+
+
+def _paid_called(client) -> list[str]:
+    from router.catalog import costs_money
+    reg = client.desk.router.registry
+    return [m for m in client.fake.calls if m in reg.models and costs_money(reg.models[m])]
+
+
+def test_auto_chat_sends_hard_questions_to_the_plan(client, claude, monkeypatch):
+    _paid_off(monkeypatch)
+    _add_free(client)
+    sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": HARD_Q}, headers=H)
+    a = [e for e in wait_answer(client, sid, 1)["events"] if e["kind"] == "assistant"][0]["data"]
+    assert a.get("subscription") and a["cost"] == 0
+    assert _paid_called(client) == []
+
+
+def test_failed_free_answer_goes_to_the_plan_not_a_paid_model(client, claude, monkeypatch):
+    """The $0.10 surprise: an easy chat's free answer failed its checks and escalated to the priciest
+    model. Now it goes to the plan the person already has, at no extra cost."""
+    _paid_off(monkeypatch)
+    _add_free(client)
+    client.fake.per = {"free-one": ["", "", ""]}
+    sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": "tell me a short joke"}, headers=H)
+    a = [e for e in wait_answer(client, sid, 1)["events"] if e["kind"] == "assistant"][0]["data"]
+    assert a.get("subscription") and "checks" in (a.get("why") or a.get("explain", {}).get("because", ""))
+    assert "free-one" in client.fake.calls and _paid_called(client) == []
+
+
+def test_no_free_model_and_no_plan_spends_nothing(client, monkeypatch):
+    _paid_off(monkeypatch)
+    monkeypatch.setenv("PROMPTARO_CLAUDE_BIN", "/nope")
+    monkeypatch.setenv("PROMPTARO_CODEX_BIN", "/nope")
+    monkeypatch.setattr(workers, "_status_cache", {})
+    sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": "tell me a short joke"}, headers=H)
+    s = wait_status(client, sid)
+    errs = [e["data"]["text"] for e in s["events"] if e["kind"] == "error"]
+    assert errs and "won't spend money" in errs[-1]
+    assert client.fake.calls == []
+
+
+def test_model_menu_locks_paid_models_when_paid_is_off(client, monkeypatch):
+    _paid_off(monkeypatch)
+    _add_free(client)
+    models = {m["id"]: m for m in client.get("/api/models").json()}
+    assert models["free-one"]["locked"] is False
+    assert any(m["paid"] and m["locked"] for m in models.values())
+    client.post("/connect/settings", json={"allow_paid": True}, headers=H)
+    models = {m["id"]: m for m in client.get("/api/models").json()}
+    assert not any(m["locked"] for m in models.values())
+
+
+def test_app_help_rides_along_only_when_asked_about_the_app(client):
+    client.fake.shared = ["4", "Click Connections."]
+    sid = client.post("/api/sessions", json={}, headers=H).json()["id"]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": "what is 2+2"}, headers=H)
+    wait_answer(client, sid, 1)
+    assert "New agent task" not in client.fake.systems[-1]
+    client.post(f"/api/sessions/{sid}/messages", json={"text": "how do I connect a free key in Promptaro?"},
+                headers=H)
+    wait_answer(client, sid, 2)
+    assert "New agent task" in client.fake.systems[-1]
