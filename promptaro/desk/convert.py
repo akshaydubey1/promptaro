@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Local file tools: PDFs, image/audio/video/document conversion. Author: Akshay Dubey
 
 Everything runs on this machine — no file leaves it. Heavy lifting comes from

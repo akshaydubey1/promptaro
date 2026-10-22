@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Stand-in for OpenAI's `codex` CLI in tests (same output shapes as codex-cli 0.162 `exec --json`)."""
 import json, os, sys
 from pathlib import Path

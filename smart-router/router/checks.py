@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Quality checks matched to the task. Author: Akshay Dubey
 
 Deterministic checks run first (free, fast). A cross-model review is only

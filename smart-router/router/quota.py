@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Free-tier ledger: know what's left before asking, never wait on a refusal. Author: Akshay Dubey
 
 For every free provider (and model, where limits are per model) it keeps

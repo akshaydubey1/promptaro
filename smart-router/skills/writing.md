@@ -1,5 +1,5 @@
 ---
-copyright: "Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE."
+copyright: "Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE."
 name: writing
 task_types: [writing]
 always_for_type: true

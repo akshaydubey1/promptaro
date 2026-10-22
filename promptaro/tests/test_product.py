@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """ChatGPT plan via Codex, plan hand-over, streaming, explanations, feedback, savings. Author: Akshay Dubey"""
 from __future__ import annotations
 

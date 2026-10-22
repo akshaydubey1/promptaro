@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Git isolation for agents. Author: Akshay Dubey
 
 Each agent works in its own git worktree on its own branch, so several agents

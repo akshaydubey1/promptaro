@@ -1,9 +1,10 @@
 Promptaro
 (formerly released as Tillwright)
-Copyright (c) 2026 Akshay Dubey. All rights reserved.
+Copyright (c) 2026 Akshay Dubey.
 
 All source code, interface design and documentation in this folder were
-created for and are owned by Akshay Dubey (see LICENSE).
+created for and are owned by Akshay Dubey, and are licensed under the
+PolyForm Small Business License 1.0.0 (see LICENSE).
 
 This software uses the following third-party components, which are NOT
 owned by Akshay Dubey and are used under their own licences. They are
@@ -18,9 +19,16 @@ included in this source tree.
   PyYAML             MIT License            https://github.com/yaml/pyyaml
   keyring            MIT License            https://github.com/jaraco/keyring
   pytest (tests)     MIT License            https://github.com/pytest-dev/pytest
+  pypdf              BSD-3-Clause           https://github.com/py-pdf/pypdf
+  Pillow             MIT-CMU (HPND)         https://github.com/python-pillow/Pillow
+  ReportLab          BSD-3-Clause           https://www.reportlab.com/opensource/
+  imageio-ffmpeg     BSD-2-Clause           https://github.com/imageio/imageio-ffmpeg
+                     (downloads an FFmpeg binary, which is under the LGPL/GPL;
+                     see https://ffmpeg.org/legal.html)
   IBM Plex fonts     SIL Open Font License  https://github.com/IBM/plex
                      (loaded from Google Fonts at runtime)
 
-External services it can connect to (OpenRouter, Anthropic, OpenAI, Google,
-Ollama, GitHub) and the AI models they provide are the property of their
+External services it can connect to (OpenRouter, Anthropic, OpenAI, Google, Groq,
+Cerebras, NVIDIA, Mistral, Cohere, Hugging Face, Together AI, Cloudflare,
+Pollinations, Ollama, GitHub) and the AI models they provide are the property of their
 respective owners and are used under their own terms.

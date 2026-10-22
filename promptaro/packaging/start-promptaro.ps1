@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 # Promptaro launcher for Windows - Author: Akshay Dubey
 # Starts Promptaro quietly in the background and opens its window (Edge/Chrome app mode).
 # First run installs what it needs (about a minute).
