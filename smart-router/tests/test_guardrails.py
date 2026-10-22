@@ -20,13 +20,14 @@ REPO = Path(__file__).resolve().parents[2]      # repository root (smart-router'
 
 
 def _tracked_files() -> list[Path]:
-    out = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True)
+    out = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+                         check=True)
     return [REPO / p for p in out.stdout.splitlines() if p.strip()]
 
 
 def _read(f: Path) -> str | None:
     try:
-        return f.read_text()
+        return f.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return None
 
@@ -152,7 +153,7 @@ def test_every_source_file_carries_the_license_header():
 
 def test_license_is_polyform_small_business_everywhere():
     for lic in ("LICENSE", "promptaro/LICENSE", "smart-router/LICENSE"):
-        text = (REPO / lic).read_text()
+        text = (REPO / lic).read_text(encoding="utf-8")
         assert text.startswith("Required Notice: Copyright (c) 2026 Akshay Dubey"), lic
         assert "# PolyForm Small Business License 1.0.0" in text, lic
 
@@ -165,7 +166,8 @@ def _history() -> list[tuple[str, str, str]] | None:
         if shallow == "true":
             return None
         out = subprocess.run(["git", "log", "--no-merges", "--format=%H%x1f%ae%x1f%B%x1e"], cwd=REPO,
-                             capture_output=True, text=True, check=True).stdout
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=True).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
     rows = []
@@ -197,7 +199,7 @@ def test_commit_history_credits_only_the_author():
 def test_servers_only_listen_on_this_computer():
     """Launchers bind 127.0.0.1, and Docker publishes on loopback only."""
     for f in ("promptaro/launch.sh", "promptaro/packaging/start-promptaro.ps1", "smart-router/Start Smart Router.command"):
-        text = (REPO / f).read_text()
+        text = (REPO / f).read_text(encoding="utf-8")
         assert "127.0.0.1" in text and "0.0.0.0" not in text, f
-    compose = (REPO / "smart-router/docker-compose.yml").read_text()
+    compose = (REPO / "smart-router/docker-compose.yml").read_text(encoding="utf-8")
     assert '"127.0.0.1:8080:8080"' in compose
