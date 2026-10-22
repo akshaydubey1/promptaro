@@ -1,5 +1,7 @@
 # Promptaro
 
+> **Status: beta.** The installer is unsigned — macOS may ask you to right-click → **Open**, and Windows SmartScreen may warn on first run.
+
 **A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.**
 
 Author: Akshay Dubey
@@ -111,6 +113,28 @@ network.
 
 ## Free models and their limits
 
+Each provider's own free tier, as recorded in `smart-router/router/free_providers.py` (checked
+2026-10-15; live rate-limit headers override these numbers whenever a provider sends them):
+
+| Provider | Free allowance | May train on prompts? |
+|---|---|---|
+| OpenRouter (free models) | 20 requests/minute; 50 requests/day (1,000/day once $10 credit has ever been bought) | depends on the model |
+| Groq | 30 requests/minute, 1,000/day, 8,000 tokens/minute, 200,000/day — per model | no |
+| Cerebras | 5 requests/minute, 30,000 tokens/minute, 1,000,000 tokens/day — per model | no |
+| NVIDIA NIM | 40 requests/minute shared across the account | no |
+| Mistral | 60 requests/minute shared across the account | yes (free tier requires it) |
+| Codestral (Mistral) | 30 requests/minute, 2,000/day shared across the account | yes |
+| Cohere | 20 requests/minute, 1,000/month — trial key, non-commercial use only | no |
+| Gemini (AI Studio free tier) | 10 requests/minute, 250/day, 250,000 tokens/minute — per model | yes |
+
+> **Cohere trial keys are non-commercial.** Promptaro's licence allows small businesses to use
+> the app commercially, but Cohere's trial tier does not — if you use Promptaro for work, skip
+> the Cohere key or use a paid Cohere key instead.
+
+Providers that may train on prompts are only used for code when **Chats and code: any free
+model** is chosen; the private-by-default providers (Groq, Cerebras, NVIDIA, Cohere) carry code
+without that switch.
+
 ## Spending: $0 by default
 
 Promptaro never spends money unless you turn that on. With no subscription it uses free models only. With a Claude
@@ -145,6 +169,11 @@ unless you choose **Chats and code: any free model**.
 - The server listens on `127.0.0.1` only, rejects requests addressed to other host names, and requires an app header on every change, so a website can't drive it.
 - Cache and build junk (`__pycache__`, `node_modules`, `.terraform`, …) never shows up in reviews or commits.
 
+## Privacy
+
+No telemetry, no account with us. Prompts go only to the AI providers you connect. Keys stay in
+your system keychain.
+
 ## Layout
 
 ```
@@ -165,7 +194,7 @@ packaging/        Mac app builder, Windows and Linux installers, icon
 ## Tests
 
 ```bash
-python -m pytest -q    # 140 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
+python -m pytest -q    # 141 tests: real git repos, scripted models, stand-in Claude Code and Codex CLIs
 ```
 
 ## Migrating from Tillwright
