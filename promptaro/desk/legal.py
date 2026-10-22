@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Terms of Use gate. Author: Akshay Dubey
 
 Promptaro won't serve anything until the person using this computer has read
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-TERMS_VERSION = "1.1"
+TERMS_VERSION = "1.2"
 
 TERMS_TEXT = """PROMPTARO — TERMS OF USE AND DISCLAIMER
 Version {TERMS_VERSION} — Akshay Dubey
@@ -45,10 +45,12 @@ or financial advice. Review everything before relying on it. You are responsible
 code and files created or changed by agents you run, and for how generated output is
 used and shared.
 
-6. Ownership. You own your inputs and, to the extent your provider's terms allow, the
-outputs generated for you. Promptaro itself is proprietary software of the Author; you
-get a personal, non-exclusive, non-transferable license to use it — not to sell it,
-sublicense it, redistribute it, or present it as your own (see the LICENSE file).
+6. Ownership and license. You own your inputs and, to the extent your provider's terms
+allow, the outputs generated for you. Promptaro is owned by the Author and licensed under
+the PolyForm Small Business License 1.0.0 (see the LICENSE file): free for personal use,
+noncommercial organizations and small businesses (fewer than 100 people and under
+1,000,000 USD revenue). Larger companies need a commercial license from the Author. You
+may not remove the copyright notice or present Promptaro as your own.
 
 7. No warranty. TO THE MAXIMUM EXTENT PERMITTED BY LAW, PROMPTARO IS PROVIDED "AS IS"
 AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING

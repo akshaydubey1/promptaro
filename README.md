@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: Proprietary" src="https://img.shields.io/badge/License-Proprietary-2e7d32.svg?style=for-the-badge"></a>
+  <a href="LICENSE"><img alt="License: PolyForm Small Business" src="https://img.shields.io/badge/License-PolyForm%20Small%20Business-2e7d32.svg?style=for-the-badge"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776ab.svg?style=for-the-badge&logo=python&logoColor=white"></a>
   <img alt="macOS | Windows | Linux" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-supported-455a64.svg?style=for-the-badge">
   <a href=".github/workflows/tests.yml"><img alt="Tests: 252 passing" src="https://img.shields.io/badge/tests-252%20passing-ad1457.svg?style=for-the-badge&logo=pytest&logoColor=white"></a>
@@ -218,6 +218,6 @@ Promptaro was previously called Tillwright. The first run moves `~/.tillwright` 
 
 ## 📄 License
 
-Copyright © 2026 Akshay Dubey. All rights reserved. Proprietary; see [LICENSE](LICENSE).
+Copyright © 2026 Akshay Dubey. Promptaro is **free for personal use, noncommercial organizations and small businesses** (fewer than 100 people and under $1M revenue) under the [PolyForm Small Business License 1.0.0](LICENSE). Larger companies need a commercial licence: ask through this repository.
 
 Promptaro is an independent project and isn't affiliated with Anthropic, OpenAI, Google or any model provider. Product names belong to their owners.

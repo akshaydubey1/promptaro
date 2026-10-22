@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Connections: sign in once, keys stored in the OS keychain. Author: Akshay Dubey
 
 - "Sign in with OpenRouter": standard OAuth PKCE. You log in on openrouter.ai,

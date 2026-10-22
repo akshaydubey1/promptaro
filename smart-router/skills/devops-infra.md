@@ -1,5 +1,5 @@
 ---
-copyright: "Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE."
+copyright: "Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE."
 name: devops-infra
 task_types: [coding, writing, document]
 triggers: [terraform, kubernetes, k8s, gke, eks, aks, helm, docker, dockerfile, ci, cd, pipeline, github actions, argo, ansible, gcp, aws, azure]

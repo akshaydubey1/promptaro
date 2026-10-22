@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Command-line launchers that run coding tools through Promptaro's gateway. Author: Akshay Dubey
 
   promptaro-claude   Claude Code, on your free (or chosen) models
@@ -23,7 +23,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent          # the promptaro folder
 
 _POSIX_HEAD = """#!/bin/bash
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 # Promptaro launcher ({what}) — Author: Akshay Dubey. Created by Promptaro; safe to delete.
 PORT="${{PROMPTARO_PORT:-${{TILLWRIGHT_PORT:-{port}}}}}"
 URL="http://127.0.0.1:$PORT"

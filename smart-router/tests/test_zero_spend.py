@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """The no-spend promise: with paid models off (the default), nothing that bills per use is
 ever called: not as the first choice, not on escalation, not for reviews, not by name."""
 from __future__ import annotations

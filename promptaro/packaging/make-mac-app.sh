@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 # Builds Promptaro.app (Applications folder, Dock, Spotlight, Launchpad) — Author: Akshay Dubey
 # The app is a small wrapper that starts Promptaro from this folder, so updates
 # to this folder are picked up without reinstalling.
@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Promptaro</string>
   <key>CFBundleIconFile</key><string>Promptaro</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Akshay Dubey. All rights reserved.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Akshay Dubey.</string>
 </dict></plist>
 PLIST
 

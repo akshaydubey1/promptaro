@@ -1,5 +1,5 @@
 ---
-copyright: "Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE."
+copyright: "Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE."
 name: structured-output
 task_types: [coding, data, document, chat, research, writing]
 triggers: [json, schema, structured output, yaml]

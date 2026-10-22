@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Coding-tools gateway: point Claude Code, Aider, Cline, Continue or OpenCode here. Author: Akshay Dubey
 
   POST /v1/messages               Anthropic Messages API (Claude Code), streaming, tools, images

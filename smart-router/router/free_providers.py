@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 """Providers with a real free tier, reached with the user's own key. Author: Akshay Dubey
 
 Each entry says where the provider lives, how to recognise its key, what its

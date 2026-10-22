@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2026 Akshay Dubey. All rights reserved. Proprietary and confidential; see LICENSE.
+# Copyright (c) 2026 Akshay Dubey. Licensed under the PolyForm Small Business License 1.0.0; see LICENSE.
 # Adds Promptaro to the Linux app menu — Author: Akshay Dubey
 set -e
 cd "$(dirname "$0")/.."
