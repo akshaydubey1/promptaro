@@ -133,3 +133,18 @@ def test_dangerous_commands_stay_refused_even_when_never_ask(tmp_path):
         assert tools.needs_approval(cmd, "never_ask", tmp_path) is not False, f"escaped vetting: {cmd}"
         # and a caller that can't vet the workspace never silently runs them either
         assert tools.needs_approval(cmd, "never_ask") is not False, f"root=None passed: {cmd}"
+
+
+def test_requests_from_other_machines_are_refused(client):
+    """Even if started on every network interface, only this computer gets an answer."""
+    import asyncio
+    import httpx
+
+    async def call(ip, method, path):
+        tr = httpx.ASGITransport(app=server.app, client=(ip, 50000))
+        async with httpx.AsyncClient(transport=tr, base_url="http://127.0.0.1:8770") as c:
+            return (await c.request(method, path, headers=H, json={} if method == "POST" else None)).status_code
+
+    assert asyncio.run(call("192.168.1.50", "GET", "/healthz")) == 403
+    assert asyncio.run(call("10.0.0.7", "POST", "/api/sessions")) == 403
+    assert asyncio.run(call("127.0.0.1", "GET", "/healthz")) == 200

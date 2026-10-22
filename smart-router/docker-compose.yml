@@ -2,7 +2,7 @@
 services:
   router:
     build: .
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]     # this computer only; set ROUTER_TOKEN before exposing it further
     env_file: .env
     volumes:
       - router-data:/data              # learned routing scores + cache survive restarts

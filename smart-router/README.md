@@ -78,7 +78,8 @@ curl -s localhost:8765/v1/run -H 'content-type: application/json' -d '{"instruct
 ```
 
 API docs at http://localhost:8765/docs. Docker (`docker compose up`) reads keys from
-`.env` instead of the keychain, since a container can't see the system keychain.
+`.env` instead of the keychain, since a container can't see the system keychain. The container is published on 127.0.0.1 only; set
+`ROUTER_TOKEN` before exposing it to a network, or anyone who can reach it could spend your keys.
 
 ## Measured routing latency
 
