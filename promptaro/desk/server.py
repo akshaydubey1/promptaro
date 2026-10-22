@@ -111,6 +111,21 @@ async def require_app_header(request: Request, call_next):
     return await call_next(request)
 
 
+_LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+@app.middleware("http")
+async def only_this_computer(request: Request, call_next):
+    """Promptaro is a single-user desktop app. Even if someone starts it bound to every
+    network interface, requests from other machines are refused: they could otherwise read
+    chats or spend the owner's keys."""
+    host = request.client.host if request.client else ""
+    if host not in _LOCAL_CLIENTS and not host.startswith("127."):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "Promptaro only answers this computer."}, status_code=403)
+    return await call_next(request)
+
+
 app.include_router(connect_api)
 app.include_router(gateway_api)          # coding tools: /v1/messages, /v1/chat/completions (token required)
 app.mount("/static", StaticFiles(directory=HERE / "ui"), name="static")

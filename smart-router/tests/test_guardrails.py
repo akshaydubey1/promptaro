@@ -8,8 +8,11 @@ and defaults that fail closed (free-only, chat-scoped free models).
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from router import catalog, free_providers, secrets
 
@@ -77,9 +80,11 @@ def test_removed_lanes_and_attribution_stay_gone():
 
 
 # ------------------------------------------------------------------ defaults
-def test_defaults_fail_closed(isolated_secrets):
+def test_defaults_fail_closed(isolated_secrets, monkeypatch):
     """With a fresh settings file, money must stay off and free code stays private."""
+    monkeypatch.delenv("PROMPTARO_ALLOW_PAID", raising=False)   # tests opt in; real installs don't
     s = catalog.get_settings()
+    assert s["allow_paid"] is False                     # paid per-use models off: $0 by default
     assert s.get("gateway_spend", "free") == "free"    # paid models refuse until explicitly enabled
     assert s.get("free_models", "chat") == "chat"      # code never routes to trains-flagged free tiers
     assert float(s.get("daily_budget_usd") or 0) == 0.0
@@ -107,3 +112,92 @@ def test_free_model_specs_carry_the_providers_privacy_flag_and_quota_lane(isolat
         assert s["free"] is True
         assert s["trains"] is flag, f"{s['id']} mislabels its provider's trains flag"
         assert s.get("quota"), f"{s['id']} has no quota lane — it would bypass the free ledger"
+
+
+# ------------------------------------------------------------------ privacy and ownership
+_PERSONAL = re.compile(r"[A-Za-z0-9._%+-]+@(gmail|googlemail|yahoo|outlook|hotmail|icloud|proton|protonmail)\.com"
+                       r"|/Users/(?!you/|me/|name/|username/|example/)[a-z][a-z0-9_-]+/|C:\\\\Users\\\\[a-z]|/home/(?!u/|user/|runner/)[a-z][a-z0-9_-]+/", re.I)
+
+
+def test_no_personal_emails_or_home_paths_in_tracked_files():
+    """Personal email addresses and real home-folder paths never ship in the repo."""
+    hits = []
+    for f in _tracked_files():
+        if f.suffix in (".png", ".jpg", ".ico", ".icns") or f.name == "test_guardrails.py":
+            continue
+        text = _read(f)
+        if text is None:
+            continue
+        for m in _PERSONAL.finditer(text):
+            hits.append(f"{f.relative_to(REPO)}: {m.group(0)}")
+    assert hits == []
+
+
+_CODE = (".py", ".sh", ".ps1", ".bat", ".command", ".js", ".css", ".html", ".yml", ".yaml")
+
+
+def test_every_source_file_carries_the_license_header():
+    """Ownership and licence are stated in every source file, and say the same thing."""
+    missing, stale = [], []
+    for f in _tracked_files():
+        if f.suffix not in _CODE or "vendor" in f.parts or ".github" in f.parts:
+            continue
+        head = (_read(f) or "")[:600]
+        if "Akshay Dubey" not in head:
+            missing.append(str(f.relative_to(REPO)))
+        if "Proprietary and confidential" in head or "All rights reserved" in head:
+            stale.append(str(f.relative_to(REPO)))
+    assert missing == [] and stale == [], f"missing: {missing[:5]} stale: {stale[:5]}"
+
+
+def test_license_is_polyform_small_business_everywhere():
+    for lic in ("LICENSE", "promptaro/LICENSE", "smart-router/LICENSE"):
+        text = (REPO / lic).read_text()
+        assert text.startswith("Required Notice: Copyright (c) 2026 Akshay Dubey"), lic
+        assert "# PolyForm Small Business License 1.0.0" in text, lic
+
+
+def _history() -> list[tuple[str, str, str]] | None:
+    """(sha, author email, message) for every non-merge commit, or None without full history."""
+    try:
+        shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPO,
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        if shallow == "true":
+            return None
+        out = subprocess.run(["git", "log", "--no-merges", "--format=%H%x1f%ae%x1f%B%x1e"], cwd=REPO,
+                             capture_output=True, text=True, check=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    rows = []
+    for rec in out.split("\x1e"):
+        parts = rec.strip("\n").split("\x1f")
+        if len(parts) == 3:
+            rows.append((parts[0][:8], parts[1], parts[2]))
+    return rows
+
+
+def test_commit_history_credits_only_the_author():
+    """Every commit is authored by the owner's private GitHub address, with no AI co-author
+    lines or tool footers. Fails loudly if a merge or a tool brings them back."""
+    rows = _history()
+    if rows is None:
+        pytest.skip("shallow clone: full history not available")
+    bad = []
+    for sha, email, msg in rows:
+        if not (email.endswith("+akshaydubey1@users.noreply.github.com") or email == "noreply@github.com"):
+            bad.append(f"{sha}: author {email}")
+        for line in msg.splitlines():
+            if re.match(r"\s*(co-authored-by|claude-session):", line, re.I) or \
+                    re.search(r"generated (with|by) \[?(claude|devin)", line, re.I):
+                bad.append(f"{sha}: {line.strip()[:60]}")
+    assert bad == [], bad[:10]
+
+
+# ------------------------------------------------------------------ network exposure
+def test_servers_only_listen_on_this_computer():
+    """Launchers bind 127.0.0.1, and Docker publishes on loopback only."""
+    for f in ("promptaro/launch.sh", "promptaro/packaging/start-promptaro.ps1", "smart-router/Start Smart Router.command"):
+        text = (REPO / f).read_text()
+        assert "127.0.0.1" in text and "0.0.0.0" not in text, f
+    compose = (REPO / "smart-router/docker-compose.yml").read_text()
+    assert '"127.0.0.1:8080:8080"' in compose
