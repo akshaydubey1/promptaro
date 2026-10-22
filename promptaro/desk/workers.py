@@ -665,8 +665,10 @@ class _ChatRun(_CliRun):
     def cwd(self, s: dict) -> str:
         return s.get("project") or str(_chat_space())
 
+    reason = ""                                 # set when Auto chose the plan (not the person)
+
     def why(self) -> str:
-        return f"your pick — answered on {PLAN[self.engine]} instead of per-use billing"
+        return self.reason or f"your pick — answered on {PLAN[self.engine]} instead of per-use billing"
 
     def emit_ok(self, summary: str, usage: dict) -> None:
         s, sid = self.store.get(self.sid), self.sid
@@ -677,8 +679,8 @@ class _ChatRun(_CliRun):
             "name": name, "via": PLAN[self.engine], "subscription": True, "passed": True,
             "cached": False, "cost": 0.0, "calls": 1, "free": False,
             "tokens_in": usage.get("tokens_in", 0), "tokens_out": usage.get("tokens_out", 0),
-            "why": f"answered on {PLAN[self.engine]} — included in your plan, no per-use cost",
-            "explain": {"subscription": True, "because": "answered on a plan you already pay for"},
+            "why": self.reason or f"answered on {PLAN[self.engine]} — included in your plan, no per-use cost",
+            "explain": {"subscription": True, "because": self.reason or "answered on a plan you already pay for"},
             "offline": False})
         self.store.update(sid, status="idle")
 

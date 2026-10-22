@@ -15,6 +15,13 @@ from .store import Store
 
 HARD_NEEDS = {"vision", "long_context"}
 
+PAID_OFF = ("Paid models are turned off, so Promptaro never spends money. Turn on "
+            "\"Allow paid models\" in Connections if you want to use them.")
+
+
+class NoFreeModel(RuntimeError):
+    """Nothing free (or included in a plan) can take this request right now."""
+
 # Rough output length by task type (tokens) before telemetry takes over.
 _BASE_OUT = {"coding": 900, "research": 1100, "writing": 700, "document": 900, "data": 700, "chat": 250}
 
@@ -98,9 +105,13 @@ def route(reg: Registry, store: Store, profile: TaskProfile, *, prefer: str = "b
           quality_override: float | None = None, max_cost_usd: float | None = None,
           force_model: str | None = None, allow_free: bool = True,
           exclude: tuple[str, ...] = (), private: bool = False,
-          require: frozenset[str] | set[str] = frozenset(), est_output: int | None = None) -> RouteDecision:
+          require: frozenset[str] | set[str] = frozenset(), est_output: int | None = None,
+          allow_paid: bool | None = None) -> RouteDecision:
     """private: skip free providers that may train on prompts (used for code).
-    require: capabilities a model must have (e.g. {"tools"} for coding tools)."""
+    require: capabilities a model must have (e.g. {"tools"} for coding tools).
+    allow_paid: may per-use paid models be chosen? None = the person's setting (off by default)."""
+    if allow_paid is None:
+        allow_paid = catalog.paid_allowed()
     target = quality_target(reg, profile, quality_override)
     w_cost = reg.weights.get("cost_per_usd", 40.0)
     w_lat = reg.weights.get("latency_per_s", 0.02)
@@ -117,9 +128,15 @@ def route(reg: Registry, store: Store, profile: TaskProfile, *, prefer: str = "b
     free_skipped = ""
     require = frozenset(require)
     ledger = quota.LEDGER
+    paid_skipped = 0
     for m in reg.usable():
         if m.id in exclude and m.id != force_model:
             continue
+        if not allow_paid and catalog.costs_money(m):
+            if m.id == force_model:
+                raise NoFreeModel(f"{m.extra.get('name', m.id)} is a paid model. {PAID_OFF}")
+            paid_skipped += 1
+            continue                                   # never spend money unless the person opted in
         if require - m.capabilities and m.id != force_model:
             continue
         if private and m.extra.get("free") and m.extra.get("trains") and m.id != force_model:
@@ -160,6 +177,13 @@ def route(reg: Registry, store: Store, profile: TaskProfile, *, prefer: str = "b
         cands.append(Candidate(m, q, cost, lat, score, clears))
 
     if not cands:
+        if paid_skipped or free_skipped:
+            raise NoFreeModel(
+                "No free model can take this right now"
+                + (f" ({free_skipped})" if free_skipped else "") + ". Free limits reset every minute "
+                "and at midnight UTC. Add more free keys (Groq, Cerebras, NVIDIA) in Connections, or "
+                "sign in to Claude Code or Codex to use your plan. Promptaro won't spend money "
+                "unless you turn on paid models.")
         raise RuntimeError("No usable model satisfies this task's hard requirements "
                            f"({sorted(hard) or 'none'}). Enable a model in config/models.yaml.")
 

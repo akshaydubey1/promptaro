@@ -157,6 +157,14 @@ class AnthropicProvider(Provider):
         return Completion("".join(parts), tin, tout, (time.perf_counter() - t0) * 1000, stop, cached, {})
 
 
+def _light_reasoning(body: dict, base: str) -> None:
+    """OpenRouter: keep "thinking" models brief and leave their reasoning out of the reply, so
+    the token allowance goes to the answer (an empty answer would otherwise fail the checks).
+    Models that don't reason ignore this."""
+    if "openrouter.ai" in base:
+        body["reasoning"] = {"effort": "low", "exclude": True}
+
+
 class OpenAIProvider(Provider):
     """OpenAI and any OpenAI-compatible endpoint (Gemini, OpenRouter, Ollama, vLLM, Azure...)."""
     URL = "https://api.openai.com/v1"
@@ -182,6 +190,7 @@ class OpenAIProvider(Provider):
         body: dict = {"model": spec.model, "messages": [{"role": "system", "content": system}, *convo]}
         # Official OpenAI uses max_completion_tokens; most compatible servers still take max_tokens.
         body["max_tokens" if self.compatible else "max_completion_tokens"] = max_tokens
+        _light_reasoning(body, base)
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         headers = await self._headers(spec, base)
@@ -207,6 +216,7 @@ class OpenAIProvider(Provider):
         body: dict = {"model": spec.model, "messages": [{"role": "system", "content": system}, *convo],
                       "stream": True, "stream_options": {"include_usage": True}}
         body["max_tokens" if self.compatible else "max_completion_tokens"] = max_tokens
+        _light_reasoning(body, base)
         headers = await self._headers(spec, base)
         t0 = time.perf_counter()
         parts, tin, tout, cached, stop = [], 0, 0, 0, ""

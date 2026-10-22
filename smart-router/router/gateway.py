@@ -413,7 +413,7 @@ def plan(router, *, messages: list[dict], est_in: int, est_out: int, tools: bool
     if images:
         prof.needs.add("vision")
     d = route(reg, router.store, prof, prefer=prefer, allow_free=mode != "off", private=mode != "all",
-              require=need, est_output=est_out)
+              require=need, est_output=est_out, allow_paid=not free_only)   # coding tools' own spend switch
     seen, out = set(), []
     if exact:
         out.append(exact); seen.add(exact.id)               # named model first, normal rungs after it

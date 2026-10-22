@@ -10,6 +10,8 @@ import pytest
 import yaml
 
 os.environ.setdefault("PROMPTARO_NO_MIGRATE", "1")   # never move real ~/.akshay-router in tests
+# Most tests exercise routing across paid models; tests of the real default (paid off) unset this.
+os.environ.setdefault("PROMPTARO_ALLOW_PAID", "1")
 
 from router import catalog, secrets  # noqa: E402
 

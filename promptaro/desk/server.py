@@ -573,6 +573,8 @@ async def models():
     usable = {m.id for m in reg.usable()}
     st = await subs()
     from .workers import MODEL_CHOICES
+    from router.catalog import costs_money, paid_allowed
+    paid_ok = paid_allowed()
     extra = []
     for mid, key, name in (("claude-code", "claude_code", "Claude Code (your Claude subscription)"),
                            ("codex", "codex", "Codex (your ChatGPT subscription)")):
@@ -586,6 +588,7 @@ async def models():
     return extra + [{"id": m.id, "name": m.extra.get("name", m.id), "via": m.extra.get("via", ""), "tier": m.tier,
              "free": bool(m.extra.get("free")), "vendor": m.extra.get("vendor", ""),
              "cost_note": m.extra.get("cost_note", ""),
+             "paid": costs_money(m), "locked": costs_money(m) and not paid_ok,
              "price_in": round(m.price_in, 3), "price_out": round(m.price_out, 3)}
             for m in sorted(reg.models.values(), key=lambda m: (m.tier, m.price_in))
             if m.id in usable and m.provider != "offline"]

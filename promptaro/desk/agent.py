@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from router import catalog, quota
 from router.classifier import classify
 from router.providers import ProviderError
-from router.selector import route
+from router.selector import NoFreeModel, route
 
 from .tools import TOOL_DOCS, ToolError, Workspace, clip, needs_approval, redact
 from .workers import engine_of
@@ -248,7 +248,11 @@ class AgentRun:
                 break
 
             planning = step == 0 and len(self.messages) <= 2
-            spec, prof, decision, ladder_len = self._pick(task, planning)
+            try:
+                spec, prof, decision, ladder_len = self._pick(task, planning)
+            except NoFreeModel as e:                    # nothing free left, and paid models are off
+                self._done(f"Paused: {e}")
+                break
             if spec.id != last_model:
                 self.last_model = {"id": spec.id, "name": spec.extra.get("name", spec.id),
                                    "via": spec.extra.get("via", ""), "free": bool(spec.extra.get("free"))}

@@ -214,7 +214,23 @@ def get_settings() -> dict:
     d.setdefault("free_models", "chat")
     d.setdefault("gateway_spend", "free")      # coding tools: "free" = never spend money, "paid_ok" = may
     d.setdefault("daily_budget_usd", 0.0)      # hard daily cap on paid spend; 0 = no cap
+    # Paid models (per-use API billing) are OFF unless the person turns them on in Connections.
+    # Free models, local models and the subscriptions they already pay for never cost extra.
+    d.setdefault("allow_paid", os.environ.get("PROMPTARO_ALLOW_PAID", "") == "1")
     return d
+
+
+def paid_allowed() -> bool:
+    return bool(get_settings().get("allow_paid"))
+
+
+def costs_money(m) -> bool:
+    """True for a model that bills per use. Free tiers, local models (Ollama, a private
+    local endpoint) and the no-AI fallback cost nothing. A remote custom endpoint counts
+    as paid: its cost can't be known."""
+    if m.provider == "offline" or m.extra.get("free"):
+        return False
+    return not (m.price_in == 0 and m.price_out == 0 and m.extra.get("via") == "local")
 
 
 def set_settings(**kw) -> dict:

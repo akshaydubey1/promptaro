@@ -1,26 +1,25 @@
 <p align="center">
-  <img src="promptaro/packaging/icon-256.png" alt="Promptaro" width="112">
+  <img src="docs/images/banner.svg" alt="Promptaro: free AI for every task. Chat, code and agents on free tokens and your own plan. $0 by default." width="100%">
 </p>
-
-<h1 align="center">Promptaro</h1>
 
 <p align="center">
   <b>A desktop app by Akshay Dubey for AI-powered chats, coding, and agent tasks.</b><br>
-  The right AI for every task. Free first.
+  Uses free AI tokens first and the Claude or ChatGPT plan you already have. <b>It never spends money unless you turn that on.</b>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Proprietary" src="https://img.shields.io/badge/License-Proprietary-2e7d32.svg?style=for-the-badge"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776ab.svg?style=for-the-badge&logo=python&logoColor=white"></a>
   <img alt="macOS | Windows | Linux" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-supported-455a64.svg?style=for-the-badge">
-  <a href=".github/workflows/tests.yml"><img alt="Tests: 238 passing" src="https://img.shields.io/badge/tests-238%20passing-ad1457.svg?style=for-the-badge&logo=pytest&logoColor=white"></a>
+  <a href=".github/workflows/tests.yml"><img alt="Tests: 252 passing" src="https://img.shields.io/badge/tests-252%20passing-ad1457.svg?style=for-the-badge&logo=pytest&logoColor=white"></a>
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-locally-00695c.svg?style=for-the-badge">
-  <img alt="Free models first" src="https://img.shields.io/badge/free%20models-first-bf4b00.svg?style=for-the-badge">
+  <img alt="Spends $0 by default" src="https://img.shields.io/badge/spends-%240%20by%20default-16a34a.svg?style=for-the-badge">
 </p>
 
 <p align="center">
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-what-you-get">Features</a> ·
+  <a href="#-0-by-default">$0 by default</a> ·
   <a href="#-how-it-works">How it works</a> ·
   <a href="#-free-providers">Free providers</a> ·
   <a href="#-coding-tools">Coding tools</a> ·
@@ -37,14 +36,30 @@
 ## ✨ What you get
 
 - **One app for every AI model.** Chat with Claude, GPT, Gemini, Llama, Qwen, DeepSeek and more, side by side, with answers streaming in as they're written.
-- **The right model for every message.** A built-in Smart Router scores each request in under a millisecond, without calling a model. Easy questions go to free models, everyday work to the cheapest model that does it well, and hard work to the strongest one.
+- **$0 by default.** Promptaro only uses free AI tokens and the subscription you already pay for. Paid per-use models stay off unless you switch them on.
+- **The right model for every message.** A built-in Smart Router scores each request in under a millisecond, without calling a model. Everyday questions go to free models; hard work goes to your Claude or ChatGPT plan if you have one.
 - **Free tokens first.** Plug in free keys from Groq, Cerebras and NVIDIA, and Promptaro tracks every per-minute, daily and monthly limit, moving to the next model before you ever see an error.
-- **Your existing plans, put to work.** Signed in to Claude Code or Codex CLI? Hard agent tasks run on your Claude or ChatGPT subscription instead of per-use billing.
+- **Your existing plans, put to work.** Signed in to Claude Code or Codex CLI? Hard chats and agent tasks run on your Claude or ChatGPT subscription, at no extra cost.
 - **Coding agents you stay in control of.** Each agent works on its own git branch in a separate copy of your repo. It reads, edits and runs your tests, then waits for you to review the diff and merge.
 - **Free models inside your coding tools.** `promptaro-claude` and `promptaro-aider` start Claude Code and Aider on free models, with no setup.
 - **Every choice explained.** Each answer shows the model, Free or Paid, tokens and cost. **Why this model?** shows what was considered and how much was saved.
 - **Studio.** Generate images on free tiers, and convert PDFs, images, audio, video and documents locally.
 - **Install with one double-click** on Mac, Windows and Linux. No terminal, no build steps.
+
+## 💸 $0 by default
+
+Promptaro is built to save you money. It follows three rules:
+
+| You have | What Promptaro uses | What it costs |
+|---|---|---|
+| **No subscription** | Free models only: Groq, Cerebras, NVIDIA, OpenRouter's free models, Ollama on your computer | **$0** |
+| **Claude Pro/Max or ChatGPT Plus/Pro** | Free models for everyday questions, your plan for hard questions and when free models can't answer | **$0 extra**, it's your plan |
+| **Paid models switched on** (optional) | Paid per-use models only when free models and your plan can't help, up to a daily cap you set | Only what you allow |
+
+- **Nothing paid by surprise.** If a free answer fails, Promptaro tries another free model or your plan. It never quietly moves up to a paid model.
+- **Paid models are locked** in the model menu until you tick **Allow paid models** in Connections.
+- **When nothing free is left** (every free limit used up), it tells you when limits reset and how to add more free keys, instead of spending.
+- **Fewer tokens per message.** Promptaro only sends its own help text when you ask about the app.
 
 ## 🚀 Quick Start
 
@@ -118,7 +133,7 @@ flowchart TD
     R --> L["Free-limit ledger<br/>skips, waits, or switches on limits"]
     L --> S["Your subscription<br/>hard agent work"]
     L --> F["Free providers<br/>Groq · Cerebras · NVIDIA"]
-    L --> K["Paid keys<br/>last resort, capped"]
+    L --> K["Paid models<br/>off unless you allow them"]
     S --> O["Answer, diff to review, or merge<br/>model, cost and savings shown"]
     F --> O
     K --> O
@@ -163,7 +178,7 @@ By default coding tools **never spend money**. Code only goes to providers that 
 | Claude Pro / Max | **Claude Code** | `claude auth status` shows a Claude account sign-in |
 | ChatGPT Plus / Pro / Business | **Codex CLI** | `codex login status` shows "Logged in using ChatGPT" |
 
-When either is signed in, hard agent tasks run on that plan. If a plan hits its usage limit, Promptaro rests it for an hour and hands the work to the other plan or the regular models. Promptaro never reads or stores either login.
+When either is signed in, hard agent tasks run on that plan. If a plan hits its usage limit, Promptaro rests it for an hour and hands the work to the other plan or to free models. Promptaro never reads or stores either login.
 
 ## 🔒 Privacy and safety
 
@@ -171,7 +186,7 @@ When either is signed in, hard agent tasks run on that plan. If a plan hits its 
 - **Keys stay in your system keychain** and are never shown again.
 - **Credential files are off limits.** `.env` files, SSH keys and certificates are never shown to any model.
 - **Agents can't escape their folder.** They work on their own branch in a separate copy, and risky commands wait for your **Allow**.
-- **Spending caps.** Each agent task has a dollar budget, and a daily cap covers all paid use.
+- **No surprise spending.** Paid models are off by default. If you turn them on, a daily cap and a per-task budget limit them.
 
 ## 📁 Repository layout
 
@@ -184,8 +199,8 @@ When either is signed in, hard agent tasks run on that plan. If a plan hits its 
 <summary><b>Run the tests</b></summary>
 
 ```
-cd smart-router && python -m pytest -q     # 103 tests
-cd promptaro && python -m pytest -q        # 135 tests
+cd smart-router && python -m pytest -q     # 112 tests
+cd promptaro && python -m pytest -q        # 140 tests
 ```
 
 Every push runs both suites on macOS, Windows and Linux with Python 3.12 and 3.13.

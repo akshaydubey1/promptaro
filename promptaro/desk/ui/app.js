@@ -131,7 +131,7 @@ $("menu").onclick = () => $("side").classList.toggle("open");
 async function loadModels() {
   try { S.models = await api("/api/models"); } catch { S.models = []; }
   S.tiers = Object.fromEntries(S.models.map((m) => [m.id, m.tier]));
-  const opts = `<option value="">Auto (router decides)</option>` + S.models.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.subscription ? "" : m.free ? " · free" : m.cost_note ? " · " + esc(m.cost_note) : m.via ? " · " + esc(m.via) : ""}</option>`).join("");
+  const opts = `<option value="">Auto (free first, then your plan)</option>` + S.models.map((m) => `<option value="${esc(m.id)}"${m.locked ? " disabled" : ""}>${esc(m.name)}${m.subscription ? " · included in your plan" : m.free ? " · free" : m.locked ? " · paid (turned off)" : m.cost_note ? " · " + esc(m.cost_note) : " · paid" + (m.via ? " via " + esc(m.via) : "")}</option>`).join("");
   $("modelPick").innerHTML = opts; $("agentModel").innerHTML = opts;
   const on = S.models.length > 0;
   $("connDot").classList.toggle("on", on);
@@ -264,7 +264,7 @@ async function openSavings() {
       <div><span class="tag sub">Subscription</span> ${plural(t.subscription_runs, "agent run")}${plans.length ? ` (${plans.join(" and ")})` : ""}</div>
       <div><span class="tag paid">Reused</span> ${plural(t.answers_cached, "repeated question")} answered instantly</div>
     </div>
-    ${q ? `<p>${q.available ? `Free requests left today: <b>${q.remaining ?? "—"}</b>${q.limit ? ` of ${q.limit}` : ""}.` : q.pause_reason === "daily" ? "Today's free requests are used up; free models come back at midnight UTC. Paid models fill in until then." : "Free models are rate-limited for a minute; paid models fill in."}${q.limit === 50 ? ' <span class="fine">Buying $10 of OpenRouter credit once raises this to 1000 a day.</span>' : ""}</p>` : ""}
+    ${q ? `<p>${q.available ? `Free requests left today: <b>${q.remaining ?? "—"}</b>${q.limit ? ` of ${q.limit}` : ""}.` : q.pause_reason === "daily" ? "Today's free requests are used up; free models come back at midnight UTC." : "Free models are rate-limited for a minute."}${q.limit === 50 ? ' <span class="fine">Buying $10 of OpenRouter credit once raises this to 1000 a day.</span>' : ""}</p>` : ""}
     ${S.freeUsage && S.freeUsage.length ? `<h3>Free providers today</h3><table class="opts-table"><thead><tr><th>Provider</th><th>Requests</th><th>Tokens</th><th>Status</th></tr></thead><tbody>${
       S.freeUsage.map((u) => `<tr><td>${esc(u.label)}</td><td>${k(u.requests_today)}${u.requests_left_today ? ` <span class="fine">(${k(u.requests_left_today)} left)</span>` : ""}</td><td>${k(u.tokens_today)}${u.tokens_left_today ? ` <span class="fine">(${k(u.tokens_left_today)} left)</span>` : ""}</td><td>${u.paused ? (u.paused === "daily" ? "Done for today" : "Cooling down") : "Available"}</td></tr>`).join("")}</tbody></table>` : ""}
     ${t.gateway_requests ? `<p>Coding tools: ${plural(t.gateway_requests, "request")}, ${t.gateway_free || 0} on free models.</p>` : ""}
@@ -652,15 +652,33 @@ async function openConnections() {
   const fm = (s.settings || {}).free_models || "chat";
   const q = s.free_quota;
   const quota = !q ? "" : q.available ? `<br><span class="sub quota">Free requests left today: <b>${q.remaining ?? "checking…"}</b>${q.limit ? ` of ${q.limit}` : ""}</span>`
-    : `<br><span class="sub quota">${q.pause_reason === "daily" ? "Today's free requests are used up (back at midnight UTC)." : "Rate-limited for a minute."} Paid models fill in.</span>`;
+    : `<br><span class="sub quota">${q.pause_reason === "daily" ? "Today's free requests are used up (back at midnight UTC)." : "Rate-limited for a minute."} ${(s.settings || {}).allow_paid ? "Paid models fill in." : "Other free providers and your plan fill in; nothing paid."}</span>`;
   rows.push(`<div class="conn-row"><span class="grow"><strong>Free models</strong><br><span class="sub">$0, rate-limited. "Private" means providers that don't train on your prompts; code (agents and coding tools) only goes to those unless you choose otherwise.</span>${quota}</span>
     <select id="freeModels">
       <option value="off" ${fm === "off" ? "selected" : ""}>Off</option>
       <option value="chat" ${fm === "chat" ? "selected" : ""}>Chats: any · Code: private ones only</option>
       <option value="all" ${fm === "all" ? "selected" : ""}>Chats and code: any free model</option>
     </select></div>`);
+  const st = s.settings || {};
+  rows.unshift(`<div class="conn-row"><span class="grow"><strong>Spending</strong><br><span class="sub">${st.allow_paid
+      ? "Paid models are <b>on</b>: when free models and your plan can't answer, Promptaro may use your OpenRouter credit or API keys, up to the daily cap."
+      : "Promptaro never spends money: it uses free models and the Claude or ChatGPT plan you already have. Paid per-use models stay off unless you turn them on."}</span></span>
+    <label class="fine" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="allowPaid" style="width:auto;margin:0" ${st.allow_paid ? "checked" : ""}>Allow paid models</label>
+    ${st.allow_paid ? `<label class="fine" style="display:flex;align-items:center;gap:4px;white-space:nowrap">Daily cap $<input id="dailyCap" type="number" min="0" step="0.5" style="width:5em" value="${+st.daily_budget_usd || 1}"></label>` : ""}</div>`);
   if (s.families && s.families.length) rows.unshift(`<p class="fine families">${s.families.length} model families connected: ${esc(s.families.slice(0, 12).join(", "))}${s.families.length > 12 ? "…" : ""}</p>`);
   $("connBody").innerHTML = rows.join("");
+  $("allowPaid").onchange = async (e) => {
+    const on = e.target.checked;
+    if (on && !confirm("Allow paid models?\n\nWhen free models and your plan can't answer, Promptaro may then spend your OpenRouter credit or API-key balance, up to a daily cap (starts at $1).")) { e.target.checked = false; return; }
+    try {
+      await api("/connect/settings", { method: "POST", body: on ? { allow_paid: true, daily_budget_usd: +(st.daily_budget_usd) || 1 } : { allow_paid: false } });
+      await loadModels(); toast(on ? "Paid models allowed, capped daily" : "Paid models off: Promptaro won't spend money"); openConnections();
+    } catch (err) { toast(err.message); }
+  };
+  if ($("dailyCap")) $("dailyCap").onchange = async (e) => {
+    try { await api("/connect/settings", { method: "POST", body: { daily_budget_usd: Math.max(0, +e.target.value || 0) } }); toast("Daily cap saved"); }
+    catch (err) { toast(err.message); }
+  };
   $("freeModels").onchange = async (e) => {
     try { await api("/connect/settings", { method: "POST", body: { free_models: e.target.value } }); await loadModels(); toast("Saved"); }
     catch (err) { toast(err.message); }
