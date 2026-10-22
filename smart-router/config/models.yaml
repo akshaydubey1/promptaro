@@ -54,4 +54,4 @@ routing:
   llm_classifier_below_confidence: 0.0
   context_budget_tokens: 24000
   cache_ttl_s: 86400
-  run_generated_code: true
+  run_generated_code: auto    # auto: run generated code only inside the provided container; true/false: force

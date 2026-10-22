@@ -23,7 +23,7 @@ instruction ─► classify ─► choose model + ladder ─► pick skills ─�
 | Choose the model | `router/selector.py`, `router/catalog.py` | Every model family on OpenRouter (`vendors: all`, up to 30 families: Anthropic, OpenAI, Google, DeepSeek, xAI, Mistral, Meta Llama, Qwen, …), a small, medium and large current model each, with live prices; size class is capped by price. Per model: expected quality (family reputation prior blended with measured pass rate and human feedback), expected cost and latency. Picks the best cost/latency trade-off among models that clear the task's quality bar; easy requests prefer free models while the daily free allowance lasts; hard needs filter first; a circuit breaker skips failing providers. `RouteDecision.why()` explains the choice (difficulty, bar, options, savings). |
 | Choose relevant skills | `router/skills.py`, `skills/*.md` | Each skill declares task types and trigger words; only matching skills are injected, under a token budget (max 3). |
 | Control token use | `router/context.py`, `router/store.py`, `router/engine.py` | Large context is trimmed to the most relevant chunks; output length is capped per task type/complexity; identical requests hit a cache; system prompts use provider prompt caching; escalation retries send only failure reasons (plus the previous draft for code). |
-| Check quality | `router/checks.py` | Empty/truncated/refusal checks; JSON validity; Python syntax and no placeholder bodies; **pytest runs** for code (generated tests or tests you supply); source links for research. Cross-model review only for high-complexity work that tests can't verify (`cross_review: auto`). |
+| Check quality | `router/checks.py` | Empty/truncated/refusal checks; JSON validity; Python syntax and no placeholder bodies; **pytest runs** for code (generated tests or tests you supply, inside the container or when enabled); source links for research. Cross-model review only for high-complexity work that tests can't verify (`cross_review: auto`). |
 | Escalate intelligently | `router/engine.py` | Climbs the ladder one step at a time (next-stronger model, or a similar-strength model from another provider), ending at the strongest. Hard tasks start on a strong model immediately. Respects `max_cost_usd`. |
 | Improve routing | `router/store.py` | Every attempt is recorded (pass/fail, cost, latency, tokens) in SQLite, and so is human feedback (`Store.feedback`, worth 3 automatic checks each). Expected quality, latency and output length per model × task type × complexity update from real results. `GET /v1/stats` shows them. |
 | Free allowance | `router/catalog.py` (`FreeQuota`) | Reads OpenRouter's daily free-request allowance, counts down locally, and pauses free models after a 429 (a minute, or until midnight UTC when the day's allowance is gone); other free providers fill in. |
@@ -41,7 +41,8 @@ instruction ─► classify ─► choose model + ladder ─► pick skills ─�
    The first time, macOS may say it's from an unidentified developer: right-click the file → **Open** → **Open**.
    The first start installs what it needs (about a minute); after that it starts in seconds.
 3. Your browser opens the app. Click **Sign in with OpenRouter**, log in, approve.
-   That one sign-in gives the router Claude, GPT and Gemini. Add a few dollars of credit on OpenRouter if your account is new.
+   That one sign-in gives the router Claude, GPT and Gemini. Free models work without any credit;
+   you only need OpenRouter credit if you turn on paid models (off by default).
 4. Type what you need and press **Run**.
 
 Nothing to fill in: model names, prices and context sizes are pulled live from
@@ -99,9 +100,10 @@ The model call itself dominates total time; routing is noise next to it.
   by cross-review, which costs an extra call.
 - Expected quality starts from the `prior` values you set; routing gets
   meaningfully better once each model has real results (≈10+ per task type).
-- Generated code is executed by pytest. Run the router in the provided
-  container (unprivileged user, read-only filesystem) or set
-  `run_generated_code: false`.
+- Generated code is executed by pytest, but only inside the provided
+  container (unprivileged user, read-only filesystem). Outside it,
+  `run_generated_code: auto` skips execution; set `true` to allow it
+  or `false` to always refuse.
 - Web search is only used on direct Anthropic connections (Anthropic's
   server-side web search tool). Through OpenRouter, research answers come from
   the model's own knowledge.
@@ -111,7 +113,7 @@ The model call itself dominates total time; routing is noise next to it.
 ## Tests
 
 ```bash
-python -m pytest -q     # 112 tests, fully offline (mocked providers and sign-in)
+python -m pytest -q     # 118 tests, fully offline (mocked providers and sign-in)
 ```
 
 ---

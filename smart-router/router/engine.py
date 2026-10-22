@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,6 +34,19 @@ BASE_SYSTEM = ("You are a precise, efficient assistant. Do exactly what the task
                "Be concise: no preamble, no restating the question.")
 
 _OUT_BUDGET = {"coding": 1800, "research": 1600, "writing": 1000, "document": 1500, "data": 1200, "chat": 500}
+
+
+def _in_container() -> bool:
+    """True inside the provided container (or any Docker-style runtime)."""
+    return os.environ.get("PROMPTARO_CONTAINER") == "1" or os.path.exists("/.dockerenv")
+
+
+def _run_code_setting(value) -> bool:
+    """run_generated_code: true/false wins outright; anything else ("auto" or
+    unset) allows generated code only inside the provided container."""
+    if isinstance(value, bool):
+        return value
+    return _in_container()
 
 
 @dataclass
@@ -116,7 +130,7 @@ class Router:
         self.max_attempts = int(r.get("max_attempts", 3))
         self.ctx_budget = int(r.get("context_budget_tokens", 24000))
         self.cache_ttl = float(r.get("cache_ttl_s", 86400))
-        self.run_code = bool(r.get("run_generated_code", True))
+        self.run_code = _run_code_setting(r.get("run_generated_code", "auto"))
         quota.use(catalog.HOME / "ledger.json")
         self.usage_listeners: list = []          # called with (spec, tokens_in, tokens_out, cost, top_cost, source)
         self._spend_cache = (0.0, 0.0)           # (refetch_at, today's spend) — budget check stays off the DB

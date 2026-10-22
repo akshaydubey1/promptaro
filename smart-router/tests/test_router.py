@@ -98,6 +98,18 @@ def test_complexity_orders_sensibly():
     assert hard.complexity > easy.complexity + 0.3
 
 
+def test_generated_code_runs_only_in_container_by_default(monkeypatch):
+    """auto = container only; an explicit true/false in config wins."""
+    from router import engine
+    monkeypatch.setattr(engine, "_in_container", lambda: False)
+    assert engine._run_code_setting("auto") is False    # the shipped config value
+    assert engine._run_code_setting(None) is False      # unset behaves like auto
+    assert engine._run_code_setting(True) is True       # user explicitly enabled it
+    assert engine._run_code_setting(False) is False
+    monkeypatch.setattr(engine, "_in_container", lambda: True)
+    assert engine._run_code_setting("auto") is True
+
+
 # ----------------------------------------------------------------- routing
 def test_simple_task_goes_to_small_model(make_router):
     r, _ = make_router({})
@@ -129,6 +141,7 @@ def test_escalates_on_syntax_error(make_router):
 
 def test_runs_user_tests_and_escalates_on_failure(make_router):
     r, fake = make_router({"claude-haiku": [WRONG_PY], "claude-sonnet": [GOOD_PY]})
+    r.run_code = True                  # the "user explicitly enabled it" path
     res = run(r, instruction="write a python function add(a, b)", tests=TESTS, use_cache=False)
     assert res.passed and res.model == "claude-sonnet"
     assert res.attempts[0].reasons[0].startswith("tests failed")
