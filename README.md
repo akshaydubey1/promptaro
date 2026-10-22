@@ -1,3 +1,7 @@
+<h1 align="center">Promptaro: Free AI for All Your Tasks</h1>
+
+<p align="center"><b>Free AI chat, free AI coding assistant and free AI agents.</b> Uses free AI models (Groq, Cerebras, NVIDIA, OpenRouter, Ollama) and your Claude or ChatGPT plan. $0 by default.</p>
+
 <p align="center">
   <img src="docs/images/banner.svg" alt="Promptaro: free AI for every task. Chat, code and agents on free tokens and your own plan. $0 by default." width="100%">
 </p>
